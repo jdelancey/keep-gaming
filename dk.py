@@ -42,6 +42,13 @@ DK_STR_DAILY_CARD_DATE_CLASS = 'sportsbook-table-header__title'
 DK_STR_SINGLE_GAME_START_TIME_TAG = 'span'
 DK_STR_SINGLE_GAME_START_TIME_CLASS = 'event-cell__start-time'
 
+DK_STR_SINGLE_GAME_STATUS_TAG = 'div'
+DK_STR_SINGLE_GAME_STATUS_CLASS = 'event-cell__status'
+DK_STR_SINGLE_GAME_TIME_TAG = 'span'
+DK_STR_SINGLE_GAME_TIME_CLASS = 'event-cell__time'
+DK_STR_SINGLE_GAME_PERIOD_TAG = 'span'
+DK_STR_SINGLE_GAME_PERIOD_CLASS = 'event-cell__period'
+
 DK_STR_SINGLE_GAME_EVENT_LINK_TAG = 'a'
 DK_STR_SINGLE_GAME_EVENT_LINK_CLASS = 'event-cell-link'
 
@@ -106,16 +113,30 @@ class SingleEvent:
         top_row_columns = top_row.find_all([DK_STR_GAME_TABLE_ROW_COLUMN_TAG], class_ = [DK_STR_GAME_TABLE_ROW_COLUMN_CLASS, DK_STR_GAME_TABLE_EMPTY_CELL])
         bottom_row_columns = bottom_row.find_all([DK_STR_GAME_TABLE_ROW_COLUMN_TAG], class_ = [DK_STR_GAME_TABLE_ROW_COLUMN_CLASS, DK_STR_GAME_TABLE_EMPTY_CELL])
 
-        away_spread = top_row_columns[0].find([DK_STR_GAME_TABLE_SPREAD_TAG], class_ = DK_STR_GAME_TABLE_SPREAD_CLASS).text if len(top_row_columns) > 0 else 0
+        away_spread = 0
+        if len(top_row_columns) > 0:
+            spread = top_row_columns[0].find([DK_STR_GAME_TABLE_SPREAD_TAG], class_ = DK_STR_GAME_TABLE_SPREAD_CLASS)
+            away_spread = spread.text if spread else 0
         self.away_team_spread = float(away_spread) if away_spread != 'pk' else 0
-        self.away_team_odds = float(top_row_columns[0].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS).text) if len(top_row_columns) > 0 else 0
+
+        odds = 0
+        if len(top_row_columns) > 0:
+            odds = top_row_columns[0].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS)
+            self.away_team_odds = float(odds.text) if odds else 0
         self.away_team_moneyline = 0
         if len(top_row_columns) > 2:
             self.away_team_moneyline = float(top_row_columns[2].text) if top_row_columns[2].text else 0
 
-        home_spread = bottom_row_columns[0].find([DK_STR_GAME_TABLE_SPREAD_TAG], class_ = DK_STR_GAME_TABLE_SPREAD_CLASS).text if len(bottom_row_columns) > 0 else 0
+        home_spread = 0
+        if len(bottom_row_columns) > 0:
+            spread = bottom_row_columns[0].find([DK_STR_GAME_TABLE_SPREAD_TAG], class_ = DK_STR_GAME_TABLE_SPREAD_CLASS)
+            home_spread = spread.text if spread else 0
         self.home_team_spread = float(home_spread) if home_spread != 'pk' else 0
-        self.home_team_odds = float(bottom_row_columns[0].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS).text) if len(bottom_row_columns) > 0 else 0
+
+        odds = 0
+        if len(bottom_row_columns) > 0:
+            odds = bottom_row_columns[0].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS)
+        self.home_team_odds = float(odds.text) if odds else 0
         self.home_team_moneyline = 0
         if len(bottom_row_columns) > 2:
             self.home_team_moneyline = float(bottom_row_columns[2].text) if bottom_row_columns[2].text else 0
@@ -187,7 +208,8 @@ def main(args: argparse.Namespace) -> None:
     if not args.new_spreadsheet:
         print(f'Updating spreadsheet ({args.existing_spreadsheet}): {gsu.create_spreadsheet_url(args.existing_spreadsheet)}')
 
-    cookies = dict(clientDateOffset = '240')
+    # cookies = dict(clientDateOffset = '240') # when DST is active
+    cookies = dict(clientDateOffset = '300') # when DST is inactive
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; CrOS x86_64 12871.102.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.141 Safari/537.36"
     }
@@ -195,9 +217,8 @@ def main(args: argparse.Namespace) -> None:
     urls = (
         (CFB_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'CFB: DraftKings (Full Game)'),
         (NCAAM_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'NCAAM: DraftKings (Full Game)'),
-        (NFL_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'NFL: DraftKings (Full Game)'),
-        (NBA_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'NBA: DraftKings (Full Game)')
-        #(CFB_FIRST_HALF_URL, {'category': 'halves', 'subcategory': '1st-half'}, 'CFB: DraftKings (First Half)'),
+        #(NFL_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'NFL: DraftKings (Full Game)'),
+        #(NBA_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'NBA: DraftKings (Full Game)')
     )
 
     all_events = []
@@ -219,7 +240,16 @@ def main(args: argparse.Namespace) -> None:
 
             day_rows = day_table.find_all([DK_STR_GAME_TABLE_ROW_TAG])
             for row in range(0, len(day_rows), 2):
-                start_time = day_rows[row].find([DK_STR_SINGLE_GAME_START_TIME_TAG], class_ = DK_STR_SINGLE_GAME_START_TIME_CLASS).text
+                start_time = ''
+
+                label = day_rows[row].find([DK_STR_SINGLE_GAME_START_TIME_TAG], class_ = DK_STR_SINGLE_GAME_START_TIME_CLASS)
+                if label:
+                    start_time = label.text
+                else:
+                    label = day_rows[row].find([DK_STR_SINGLE_GAME_STATUS_TAG], class_ = DK_STR_SINGLE_GAME_STATUS_CLASS)
+                    if label:
+                        start_time = f'Event in progress when spreadsheet was built ({label.find([DK_STR_SINGLE_GAME_TIME_TAG], class_ = DK_STR_SINGLE_GAME_TIME_CLASS).text} | {label.find([DK_STR_SINGLE_GAME_PERIOD_TAG], class_ = DK_STR_SINGLE_GAME_PERIOD_CLASS).text})'
+
                 event_id = day_rows[row].find([DK_STR_SINGLE_GAME_EVENT_LINK_TAG], class_ = DK_STR_SINGLE_GAME_EVENT_LINK_CLASS).attrs['href'].split('/', -1)[-1]
                 new_event = SingleEvent()
                 new_event.load_from_rows([day_rows[row], day_rows[row + 1]], date = date, time = start_time, event_id = event_id)
@@ -231,6 +261,13 @@ def main(args: argparse.Namespace) -> None:
         #events = events[0:2]
         # jmd testing: pop off a couple of the early games as though they have already been played
         #events = events[3:]
+        # jmd testing: add a new fake event in update mode
+        # if not args.new_spreadsheet:
+        #     new_event = SingleEvent()
+        #     new_event.event_id = '12345'
+        #     new_event.home_team = 'test new home team'
+        #     new_event.away_team = 'test new away team'
+        #     events.append(new_event)
 
         all_events.append(events)
 
@@ -251,7 +288,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description =
         'Keep Gaming! is a command line tool for automatically downloading \
-        DraftKings betting lines and creating a Google Sheets  spreadsheet for \
+        DraftKings betting lines and creating a Google Sheets spreadsheet for \
         managing bets and tracking line changes throughout the week.')
 
     group = parser.add_mutually_exclusive_group(required=True)

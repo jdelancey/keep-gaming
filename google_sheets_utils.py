@@ -21,7 +21,7 @@ GOOGLE_API_SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 GOOGLE_SHEETS_BASE_URL = 'https://docs.google.com/spreadsheets/d'
 
-SLEEP_TIME = 3
+SLEEP_TIME = 4
 
 GAME_LINK = 'Game Link'
 GAME_DATE = 'Date'
@@ -1345,7 +1345,7 @@ def format_event_rows(
         for request in merge_request:
             requests.append(request)
 
-    # create checkboxes for betting choices in columns 5,8,10
+    # create checkboxes for betting choices
     if not update:
         indices = [
             SHEET_HEADER_COLUMN_ORDER.index(BET_SPREAD),
@@ -1385,14 +1385,13 @@ def format_event_rows(
 
     # add borders around spread, over/under, and moneyline cells and
     # their corresponding bet checkboxes
-    #if not update:
-    format_borders_request = create_format_borders_request(
-    sheet_id,
-    starting_row)
-    #jmd: end if not update
+    if not update:
+        format_borders_request = create_format_borders_request(
+            sheet_id,
+            starting_row)
 
-    for request in format_borders_request:
-        requests.append(request)
+        for request in format_borders_request:
+            requests.append(request)
 
     body = {
         'requests': requests
@@ -1646,10 +1645,14 @@ def create_new_spreadsheet_from_events(
         title)
 
     sheet_id = 0
+
     for events in all_events:
         if not len(events):
             sheet_id += 1
             continue
+
+        event_index = 0
+        event_count = len(events)
 
         sheet_name = events[0].sheet_name
 
@@ -1693,8 +1696,9 @@ def create_new_spreadsheet_from_events(
                 row,
                 update)
 
-            print(f'Added new entry for {event.away_team} @ {event.home_team}')
+            print(f'Added new entry for {event.away_team} @ {event.home_team} ({event_index}/{event_count})')
             row += 3
+            event_index += 1
 
             time.sleep(SLEEP_TIME)
 
@@ -1736,10 +1740,12 @@ def update_spreadsheet_from_events(
         num_rows = get_number_of_rows(
             service,
             spreadsheet_id,
-            sheet_name) + 2
+            sheet_name) + 3
 
         update = True
 
+        event_index = 1
+        event_count = len(events)
         for event in events:
             event.print()
 
@@ -1762,9 +1768,8 @@ def update_spreadsheet_from_events(
                     row,
                     update)
 
-                print(f'Updated data for {event.away_team} @ {event.home_team}')
+                print(f'Updated data for {event.away_team} @ {event.home_team} ({event_index}/{event_count})')
                 del event_ids[event.event_id]
-
             else:
                 row = num_rows
                 num_rows += 3
@@ -1782,12 +1787,17 @@ def update_spreadsheet_from_events(
                     spreadsheet_id,
                     sheet_id,
                     event,
-                    row)
+                    row,
+                    False)
 
-                print(f'Updated data for {event.away_team} @ {event.home_team}')
+                print(f'Added data for {event.away_team} @ {event.home_team} ({event_index}/{event_count})')
 
             time.sleep(SLEEP_TIME)
 
+            event_index += 1
+
+        event_index = 1
+        event_count = len(event_ids)
         for event_id in event_ids:
             format_obsolete_event(
                 service,
@@ -1795,12 +1805,18 @@ def update_spreadsheet_from_events(
                 sheet_id,
                 event_ids[event_id])
 
+            print(f'Clearing obsolete event {event_id} ({event_index}/{event_count})')
+            event_index += 1
+            time.sleep(SLEEP_TIME)
+
         format_sheet(
             service,
             spreadsheet_id,
             sheet_id,
             update
         )
+
+        sheet_id += 1
 
     print(f'Spreadsheet has been updated and is available at: {create_spreadsheet_url(spreadsheet_id)}')
     print(f'To update again: dk.py --update {spreadsheet_id}')
