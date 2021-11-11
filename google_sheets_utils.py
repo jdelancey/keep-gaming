@@ -13,7 +13,7 @@ from dk import SingleEvent, DK_STR_EVENTS_URL
 import team_colors as tc
 
 GOOGLE_CLIENT_SECRETS_FILE = './keys/app_secret.json'
-GOOGLE_CREDENTIALS_FILE_LOCAL = './keys/client_secret_588444115345-rncj0gehs30silqrafl8cbtoo3p5j70f.apps.googleusercontent.com.json'
+GOOGLE_CREDENTIALS_FILE_LOCAL = './keys/client_secret.json'
 
 GOOGLE_API_SERVICE_NAME = 'sheets'
 GOOGLE_API_SERVICE_VERSION = 'v4'
@@ -21,7 +21,8 @@ GOOGLE_API_SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 GOOGLE_SHEETS_BASE_URL = 'https://docs.google.com/spreadsheets/d'
 
-SLEEP_TIME = 4
+SLEEP_TIME = 3
+SLEEP_TIME_SHORT = 1
 
 GAME_LINK = 'Game Link'
 GAME_DATE = 'Date'
@@ -98,7 +99,7 @@ def get_credentials(
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
                 GOOGLE_CLIENT_SECRETS_FILE, scopes)
-            credentials = flow.run_local_server(port=0)
+            credentials = flow.run_local_server()
 
         with open(credentials_file, 'w') as token:
             token.write(credentials.to_json())
@@ -883,30 +884,14 @@ def create_format_obsolete_event_request(
     sheet_id: int,
     row: int) -> List[dict]:
 
-    background_color = hex_to_rgb('#888888')
-
     obsolete_request = {
-        'repeatCell': {
+        'deleteDimension': {
             'range': {
                 'sheetId': sheet_id,
-                'startRowIndex': row,
-                'endRowIndex': row + 2,
-                'startColumnIndex': 0,
-                'endColumnIndex': len(SHEET_HEADER_COLUMN_ORDER)
-            },
-            'cell': {
-                'userEnteredFormat': {
-                    'backgroundColor': {
-                        'red': background_color[0],
-                        'green': background_color[1],
-                        'blue': background_color[2]
-                    },
-                    'textFormat': {
-                        'strikethrough': True
-                    }
-                }
-            },
-            'fields': 'userEnteredFormat(backgroundColor,textFormat)'
+                'dimension': 'ROWS',
+                'startIndex': row,
+                'endIndex': row + 3
+            }
         }
     }
 
@@ -1796,18 +1781,22 @@ def update_spreadsheet_from_events(
 
             event_index += 1
 
+        event_rows_reversed = list(event_ids.values())
+        event_rows_reversed.reverse()
         event_index = 1
-        event_count = len(event_ids)
-        for event_id in event_ids:
+        event_count = len(event_rows_reversed)
+
+        for row in event_rows_reversed:
+            print(f'Clearing obsolete event at row {row + 1} ({event_index}/{event_count})')
+
             format_obsolete_event(
                 service,
                 spreadsheet_id,
                 sheet_id,
-                event_ids[event_id])
+                row)
 
-            print(f'Clearing obsolete event {event_id} ({event_index}/{event_count})')
             event_index += 1
-            time.sleep(SLEEP_TIME)
+            time.sleep(SLEEP_TIME_SHORT)
 
         format_sheet(
             service,
