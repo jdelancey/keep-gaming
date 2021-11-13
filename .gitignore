@@ -1,0 +1,5 @@
+.vscode/
+__pycache__/
+keys/
+kenpom_credentials.py
+geckodriver.log

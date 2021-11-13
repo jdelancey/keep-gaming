@@ -7,6 +7,7 @@ import requests
 from typing import List
 
 import google_sheets_utils as gsu
+import kenpom
 
 DK_STR_BASE_URL = 'https://sportsbook.draftkings.com'
 DK_STR_EVENTS_URL = f'{DK_STR_BASE_URL}/event'
@@ -79,7 +80,8 @@ class SingleEvent:
         'over_under',
         'over_odds',
         'under_odds',
-        'sheet_name'
+        'sheet_name',
+        'kenpom_event'
     ]
 
     def __init__(
@@ -87,6 +89,8 @@ class SingleEvent:
 
         for slot in self.__slots__:
             self.__setattr__(slot, '')
+
+        self.kenpom_event = None
 
         return
 
@@ -184,6 +188,29 @@ class SingleEvent:
         self.load_from_rows([table_rows[0], table_rows[1]], kwargs)
         return
 
+    def calculate_kelly_criterion(
+        self,
+        team: str) -> float:
+
+        if not self.kenpom_event:
+            return 0
+
+        moneyline = self.home_team_moneyline if team == self.home_team else self.away_team_moneyline
+        decimal_odds = 0
+        if moneyline >= 0:
+            decimal_odds = (moneyline / 100) + 1
+        else:
+            decimal_odds = (100 / -moneyline) + 1
+
+
+        b = decimal_odds - 1
+        p = self.kenpom_event.confidence if self.kenpom_event.winning_team == team else 1 - self.kenpom_event.confidence
+        q = 1 - p
+        k = (b * p - q) / b
+
+        f = '{:.2f}'.format(k * 100)
+        return float(f)
+
     def print(
         self) -> None:
 
@@ -197,6 +224,18 @@ class SingleEvent:
         print(f'  {self.home_team.ljust(15)}\t {self.home_team_spread} ({self.home_team_odds})\t Moneyline: {self.home_team_moneyline}')
         print(f'  {str("Over:").ljust(15)}\t {self.over_under} ({self.over_odds})')
         print(f'  {str("Under:").ljust(15)}\t {self.over_under} ({self.under_odds})')
+
+        if self.kenpom_event:
+            print(f'  KenPom:')
+            print(f'    Winner: {self.kenpom_event.winning_team} {self.kenpom_event.score} ({self.kenpom_event.confidence * 100}%)')
+
+            k_home = self.calculate_kelly_criterion(self.home_team)
+            k_away = self.calculate_kelly_criterion(self.away_team)
+
+            if k_home > 0:
+                print(f'  Kelly: {self.home_team}: {k_home}%')
+            if k_away > 0:
+                print(f'  Kelly: {self.away_team}: {k_away}%')
 
         return
 
@@ -222,7 +261,12 @@ def main(args: argparse.Namespace) -> None:
     )
 
     all_events = []
+
     for url in urls:
+        kenpom_events = []
+        if url[0] == NCAAM_URL:
+            kenpom_events = kenpom.get_kenpom_events()
+
         response = requests.get(url[0], cookies = cookies, headers = headers, params = url[1], timeout = 5)
         print(f'Retrieved {url[2]} data from: {response.url}')
         doc = bs(response.text, 'html.parser')
@@ -256,6 +300,15 @@ def main(args: argparse.Namespace) -> None:
                 if new_event.game_date:
                     new_event.sheet_name = url[2]
                     events.append(new_event)
+
+                    for kenpom_event in kenpom_events:
+                        if kenpom_event.contains_team(new_event.home_team) and kenpom_event.contains_team(new_event.away_team):
+                            new_event.kenpom_event = kenpom_event
+                        elif kenpom_event.contains_team(new_event.home_team) or kenpom_event.contains_team(new_event.away_team):
+                            if new_event.home_team != kenpom_event.home_team:
+                                print(f'\'{kenpom_event.home_team}\': \'{new_event.home_team}\',')
+                            if new_event.away_team != kenpom_event.away_team:
+                                print(f'\'{kenpom_event.away_team}\': \'{new_event.away_team}\',')
 
         # jmd testing: only work on a few events when testing
         #events = events[0:2]

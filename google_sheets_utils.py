@@ -44,6 +44,9 @@ OVER_UNDER_LATEST = 'O/U (Latest)'
 OVER_UNDER_MOVEMENT = 'O/U Movement'
 MONEYLINE_LATEST = 'Moneyline (Latest)'
 MONEYLINE_MOVEMENT = 'Moneyline Movement)'
+KENPOM = 'KenPom Confidence'
+BEST_BET = 'Best Bet'
+KELLY = 'Kelly'
 
 SHEET_COLUMNS = list(string.ascii_uppercase)
 SHEET_HEADER_COLUMN_ORDER = [
@@ -66,7 +69,10 @@ SHEET_HEADER_COLUMN_ORDER = [
     OVER_UNDER_LATEST,
     OVER_UNDER_MOVEMENT,
     MONEYLINE_LATEST,
-    MONEYLINE_MOVEMENT
+    MONEYLINE_MOVEMENT,
+    KENPOM,
+    BEST_BET,
+    KELLY
 ]
 
 def hex_to_rgb(
@@ -147,20 +153,29 @@ def add_header_row(
     service: Resource,
     spreadsheet_id: str,
     sheet_id: int,
-    sheet_name: str ) -> bool:
+    sheet_name: str,
+    include_kenpom: bool ) -> bool:
 
     sheets = service.spreadsheets()
 
     # create cells and add text
-    values = [SHEET_HEADER_COLUMN_ORDER]
+    if include_kenpom:
+        values = [SHEET_HEADER_COLUMN_ORDER]
+    else:
+        values = [SHEET_HEADER_COLUMN_ORDER[:-3]]
+
     body = {
         'values': values,
     }
 
     start_column_int = 0
     end_column_int = len(SHEET_HEADER_COLUMN_ORDER) - 1
+    if not include_kenpom:
+        end_column_int -= 3
+
     start_column = SHEET_COLUMNS[start_column_int]
     stop_column = SHEET_COLUMNS[end_column_int]
+
     row = 1 # 1-based
     sheets.values().update(
         spreadsheetId = spreadsheet_id,
@@ -315,15 +330,19 @@ def add_event_rows(
     if update:
         start_column_int = SHEET_HEADER_COLUMN_ORDER.index(UPDATED)
         end_column_int = SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_MOVEMENT)
+        if event.kenpom_event:
+            end_column_int += 3
         start_column = SHEET_COLUMNS[start_column_int]
         stop_column = SHEET_COLUMNS[end_column_int]
 
+        matchup_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MATCHUP)]
         starting_spread_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(SPREAD)]
         starting_over_under_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(OVER_UNDER_SPACER)]
         starting_moneyline_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE)]
         latest_spread_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(SPREAD_LATEST)]
         latest_over_under_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(OVER_UNDER_LATEST)]
         latest_moneyline_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_LATEST)]
+        kelly_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(KELLY)]
 
         # away team row
         values = [
@@ -337,6 +356,14 @@ def add_event_rows(
                 f'=MINUS({starting_moneyline_column}{row},{latest_moneyline_column}{row})'
             ]
         ]
+
+        if event.kenpom_event:
+            if event.away_team == event.kenpom_event.winning_team:
+                values[0].append(event.kenpom_event.confidence)
+            else:
+                values[0].append(1 - event.kenpom_event.confidence)
+            values[0].append(f'=IF({kelly_column}{row}>0,{matchup_column}{row},"")')
+            values[0].append(event.calculate_kelly_criterion(event.away_team))
 
         body = {
             'values': values,
@@ -361,6 +388,14 @@ def add_event_rows(
             ]
         ]
 
+        if event.kenpom_event:
+            if event.home_team == event.kenpom_event.winning_team:
+                values[0].append(event.kenpom_event.confidence)
+            else:
+                values[0].append(1 - event.kenpom_event.confidence)
+            values[0].append(f'=IF({kelly_column}{row + 1}>0,{matchup_column}{row + 1},"")')
+            values[0].append(event.calculate_kelly_criterion(event.home_team))
+
         body = {
             'values': values,
         }
@@ -372,9 +407,14 @@ def add_event_rows(
             valueInputOption = 'USER_ENTERED').execute()
     else:
         start_column_int = 0
-        end_column_int = SHEET_HEADER_COLUMN_ORDER.index(UPDATED)
+        end_column_int = SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_MOVEMENT)
+        if event.kenpom_event:
+            end_column_int += 3
         start_column = SHEET_COLUMNS[start_column_int]
         stop_column = SHEET_COLUMNS[end_column_int]
+
+        matchup_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MATCHUP)]
+        kelly_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(KELLY)]
 
         # away team row
         values = [
@@ -392,9 +432,23 @@ def add_event_rows(
                 '', # leave blank for last bet /u
                 event.away_team_moneyline,
                 '', # checkbox for bet moneyline
-                event.last_updated
+                event.last_updated,
+                '', # spread latest
+                '', # spread movement
+                '', # o/u latest
+                '', # o/u movement
+                '', # moneyline latest
+                '', # moneyline movement
             ]
         ]
+
+        if event.kenpom_event:
+            if event.away_team == event.kenpom_event.winning_team:
+                values[0].append(event.kenpom_event.confidence)
+            else:
+                values[0].append(1 - event.kenpom_event.confidence)
+            values[0].append(f'=IF({kelly_column}{row}>0,{matchup_column}{row},"")')
+            values[0].append(event.calculate_kelly_criterion(event.away_team))
 
         body = {
             'values': values,
@@ -422,9 +476,23 @@ def add_event_rows(
                 '', # leave blank for last bet o/u
                 event.home_team_moneyline,
                 '', # checkbox for bet moneyline
-                event.last_updated
+                event.last_updated,
+                '', # spread latest
+                '', # spread movement
+                '', # o/u latest
+                '', # o/u movement
+                '', # moneyline latest
+                '', # moneyline movement
             ]
         ]
+
+        if event.kenpom_event:
+            if event.home_team == event.kenpom_event.winning_team:
+                values[0].append(event.kenpom_event.confidence)
+            else:
+                values[0].append(1 - event.kenpom_event.confidence)
+            values[0].append(f'=IF({kelly_column}{row + 1}>0,{matchup_column}{row + 1},"")')
+            values[0].append(event.calculate_kelly_criterion(event.home_team))
 
         body = {
             'values': values,
@@ -1636,7 +1704,7 @@ def create_new_spreadsheet_from_events(
             sheet_id += 1
             continue
 
-        event_index = 0
+        event_index = 1
         event_count = len(events)
 
         sheet_name = events[0].sheet_name
@@ -1654,11 +1722,18 @@ def create_new_spreadsheet_from_events(
                 sheet_id,
                 sheet_name)
 
+        include_kenpom = False
+        for event in events:
+            if event.kenpom_event:
+                include_kenpom = True
+                break
+
         add_header_row(
             service,
             spreadsheet_id,
             sheet_id,
-            sheet_name)
+            sheet_name,
+            include_kenpom)
 
         row = 3
         update = False
