@@ -114,7 +114,11 @@ class KenPomEvent:
 
 def get_kenpom_events() -> List[KenPomEvent]:
 
-    browser = webdriver.Chrome()
+    browser_options = webdriver.ChromeOptions()
+    browser_options.add_argument('--no-sandbox')
+    browser_options.add_argument('--headless')
+    browser_options.add_argument('--disable-gpu')
+    browser = webdriver.Chrome(chrome_options = browser_options)
     browser.get('https://kenpom.com/fanmatch.php')
 
     email = browser.find_element_by_name('email')
