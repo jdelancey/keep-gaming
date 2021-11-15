@@ -1,8 +1,8 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -u
 
 import argparse
 from bs4 import BeautifulSoup as bs
-from datetime import date, datetime, timedelta
+import datetime
 import requests
 from typing import List
 
@@ -53,15 +53,128 @@ DK_STR_SINGLE_GAME_PERIOD_CLASS = 'event-cell__period'
 DK_STR_SINGLE_GAME_EVENT_LINK_TAG = 'a'
 DK_STR_SINGLE_GAME_EVENT_LINK_CLASS = 'event-cell-link'
 
+FULL_GAME_PARAMS = {'category': 'game-lines', 'subcategory': 'game'}
+
 CFB_URL = 'https://sportsbook.draftkings.com/leagues/football/88670775' #?category=game-lines&subcategory=game'
-CFB_FIRST_HALF_URL = 'https://sportsbook.draftkings.com/leagues/football/88670775' #?category=halves'
+CFB_SHEET_NAME = 'CFB: DraftKings (Full Game)'
+
+#CFB_FIRST_HALF_URL = 'https://sportsbook.draftkings.com/leagues/football/88670775' #?category=halves'
+
 NCAAM_URL = 'https://sportsbook.draftkings.com/leagues/basketball/88670771' #?category=game-lines&subcategory=game
+NCAAM_SHEET_NAME = 'NCAAM: DraftKings (Full Game)'
 
 NFL_URL = 'https://sportsbook.draftkings.com/leagues/football/88670561' #?category=game-lines&subcategory=game
-
 NBA_URL = 'https://sportsbook.draftkings.com/leagues/basketball/88670846' #?category=game-lines&subcategory=game
 
-class SingleEvent:
+CFB_SHEET_INDEX = 0
+NCAAM_SHEET_INDEX = 1
+
+REQUEST_TIMEOUT = 5
+
+class DraftKingsEventGroup:
+    '''A single category of events for a single sport/event type.'''
+
+    __slots__ = [
+        'last_updated',
+        'url',
+        'url_params',
+        'sheet_id',
+        'sheet_name',
+        'events',
+        'include_kenpom',
+        'names_to_update'
+    ]
+
+    def __init__(
+        self):
+
+        for slot in self.__slots__:
+            self.__setattr__(slot, '')
+
+        self.events = List[DraftKingsSingleEvent]
+        self.include_kenpom = False
+        self.names_to_update = []
+
+        return
+
+    def __init__(
+        self,
+        url: str,
+        url_params: str,
+        sheet_id: int,
+        sheet_name: str,
+        include_kenpom: bool):
+
+        self.url = url
+        self.url_params = url_params
+        self.sheet_id = sheet_id
+        self.sheet_name = sheet_name
+        self.include_kenpom = include_kenpom
+        self.names_to_update = []
+
+        return
+
+    def load(
+        self,
+        **kwargs) -> bool:
+
+        if not self.url:
+            return False
+
+        kenpom_events = kenpom.get_kenpom_events() if self.include_kenpom else []
+        self.names_to_update = []
+
+        cookies = kwargs['cookies'] if 'cookies' in kwargs else {}
+        headers = kwargs['headers'] if 'headers' in kwargs else {}
+        response = requests.get(self.url, cookies = cookies, headers = headers, params = self.url_params, timeout = REQUEST_TIMEOUT)
+        print(f'Retrieved {self.sheet_name} data from: {response.url}')
+
+        doc = bs(response.text, 'html.parser')
+        daily_cards = doc.find_all([DK_STR_DAILY_CARD_TAG], class_ = DK_STR_DAILY_CARD_CLASS)
+
+        self.events = []
+        for day in daily_cards:
+            date = day.find([DK_STR_DAILY_CARD_DATE_TAG], class_ = DK_STR_DAILY_CARD_DATE_CLASS)
+            if not date:
+                continue
+
+            date = date.text
+            day_table = day.find([DK_STR_GAME_TABLE_TAG], class_ = DK_STR_GAME_TABLE_CLASS)
+
+            day_rows = day_table.find_all([DK_STR_GAME_TABLE_ROW_TAG])
+            for row in range(0, len(day_rows), 2):
+                start_time = ''
+                in_progress = False
+
+                label = day_rows[row].find([DK_STR_SINGLE_GAME_START_TIME_TAG], class_ = DK_STR_SINGLE_GAME_START_TIME_CLASS)
+                if label:
+                    start_time = label.text
+                else:
+                    label = day_rows[row].find([DK_STR_SINGLE_GAME_STATUS_TAG], class_ = DK_STR_SINGLE_GAME_STATUS_CLASS)
+                    if label:
+                        start_time = f'{label.find([DK_STR_SINGLE_GAME_TIME_TAG], class_ = DK_STR_SINGLE_GAME_TIME_CLASS).text} | {label.find([DK_STR_SINGLE_GAME_PERIOD_TAG], class_ = DK_STR_SINGLE_GAME_PERIOD_CLASS).text}'
+                        in_progress = True
+
+                event_id = day_rows[row].find([DK_STR_SINGLE_GAME_EVENT_LINK_TAG], class_ = DK_STR_SINGLE_GAME_EVENT_LINK_CLASS).attrs['href'].split('/', -1)[-1]
+                new_event = DraftKingsSingleEvent()
+                new_event.load_from_rows([day_rows[row], day_rows[row + 1]], date = date, time = start_time, event_id = event_id, in_progress = in_progress)
+                if new_event.game_date:
+                    self.events.append(new_event)
+
+                    for kenpom_event in kenpom_events:
+                        if kenpom_event.contains_team(new_event.home_team) and kenpom_event.contains_team(new_event.away_team):
+                            new_event.kenpom_event = kenpom_event
+                        elif kenpom_event.contains_team(new_event.home_team) or kenpom_event.contains_team(new_event.away_team):
+                            if new_event.home_team != kenpom_event.home_team:
+                                self.names_to_update.append((kenpom_event.home_team, new_event.home_team))
+                            if new_event.away_team != kenpom_event.away_team:
+                                self.names_to_update.append((kenpom_event.away_team, new_event.away_team))
+
+        self.last_updated = f'{datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}'
+        return True
+
+
+class DraftKingsSingleEvent:
     '''A single event (game) including basic gambling information.'''
 
     __slots__ = [
@@ -69,6 +182,7 @@ class SingleEvent:
         'event_id',
         'game_date',
         'game_time',
+        'in_progress',
         'away_team',
         'away_team_spread',
         'away_team_odds',
@@ -164,15 +278,21 @@ class SingleEvent:
 
         self.game_date = kwargs['date'].strip() if 'date' in kwargs else ''
         if self.game_date.lower() == 'today':
-            self.game_date = datetime.today().strftime('%a %b %-d').upper()
+            # check if it's past 7 pm eastern. if so, 'today' is really 'tomorrow' due to these coming back in utc
+            if datetime.datetime.now().time() > datetime.time(19, 0, 0):
+                self.game_date = (datetime.datetime.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
+            else:
+                # probably need a similar check here, too
+                self.game_date = datetime.date.today().strftime('%a %b %-d')
         elif self.game_date.lower() == 'tomorrow':
-            self.game_date = (datetime.today() + timedelta(days = 1)).strftime('%a %b %-d').upper()
+            self.game_date = (datetime.date.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
         elif self.game_date:
             self.game_date = self.game_date[0:-2]
 
         self.game_time = kwargs['time'].strip() if 'time' in kwargs else ''
         self.event_id = kwargs['event_id'] if 'event_id' in kwargs else ''
-        self.last_updated = f'{date.today()} {datetime.now().strftime("%H:%M:%S")}'
+        self.in_progress = kwargs['in_progress'] if 'in_progress' in kwargs else False
+        self.last_updated = f'{datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}'
 
         return
 
@@ -206,7 +326,7 @@ class SingleEvent:
         b = decimal_odds - 1
         p = self.kenpom_event.confidence if self.kenpom_event.winning_team == team else 1 - self.kenpom_event.confidence
         q = 1 - p
-        k = (b * p - q) / b
+        k = (b * p - q) / b if b != 0 else 0
 
         f = '{:.2f}'.format(k * 100)
         return float(f)
@@ -219,7 +339,7 @@ class SingleEvent:
 
         print()
         print(f'Summary of {self.away_team} @ {self.home_team}{game_time_string}{event_url}')
-        print(f'  {str("Last Updated: ").ljust(15)}\t {date.today()} {datetime.now().strftime("%H:%M:%S")}')
+        print(f'  {str("Last Updated: ").ljust(15)}\t {datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}')
         print(f'  {self.away_team.ljust(15)}\t {self.away_team_spread} ({self.away_team_odds})\t Moneyline: {self.away_team_moneyline}')
         print(f'  {self.home_team.ljust(15)}\t {self.home_team_spread} ({self.home_team_odds})\t Moneyline: {self.home_team_moneyline}')
         print(f'  {str("Over:").ljust(15)}\t {self.over_under} ({self.over_odds})')
@@ -239,10 +359,21 @@ class SingleEvent:
 
         return
 
-def main(args: argparse.Namespace) -> None:
+def main(
+    args: argparse.Namespace) -> None:
+
+    event_groups = []
+    if args.cfb:
+        event_groups.append(DraftKingsEventGroup(CFB_URL, FULL_GAME_PARAMS, CFB_SHEET_INDEX, CFB_SHEET_NAME, False))
+    if args.ncaam:
+        event_groups.append(DraftKingsEventGroup(NCAAM_URL, FULL_GAME_PARAMS, NCAAM_SHEET_INDEX, NCAAM_SHEET_NAME, True))
+
+    if not event_groups:
+        print('ERROR: At least one event group (CFB, NCAAM, etc.) must be specified; exiting.')
+        return
 
     service = gsu.get_spreadsheet_service()
-    service._http.timeout = 5
+    service._http.timeout = REQUEST_TIMEOUT
 
     if not args.new_spreadsheet:
         print(f'Updating spreadsheet ({args.existing_spreadsheet}): {gsu.create_spreadsheet_url(args.existing_spreadsheet)}')
@@ -253,87 +384,26 @@ def main(args: argparse.Namespace) -> None:
         "User-Agent": "Mozilla/5.0 (X11; CrOS x86_64 12871.102.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.141 Safari/537.36"
     }
 
-    urls = (
-        (CFB_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'CFB: DraftKings (Full Game)'),
-        (NCAAM_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'NCAAM: DraftKings (Full Game)'),
-        #(NFL_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'NFL: DraftKings (Full Game)'),
-        #(NBA_URL, {'category': 'game-lines', 'subcategory': 'game'}, 'NBA: DraftKings (Full Game)')
-    )
 
-    all_events = []
 
-    for url in urls:
-        kenpom_events = []
-        if url[0] == NCAAM_URL:
-            kenpom_events = kenpom.get_kenpom_events()
+    for event_group in event_groups:
+        event_group.load(cookies = cookies, headers = headers)
 
-        response = requests.get(url[0], cookies = cookies, headers = headers, params = url[1], timeout = 5)
-        print(f'Retrieved {url[2]} data from: {response.url}')
-        doc = bs(response.text, 'html.parser')
+        if event_group.names_to_update:
+            print('The following name mismatches were detected. Add these entries to team_index.py:')
+            for name in event_group.names_to_update:
+                print(f'\'{name[0]}\': \'{name[1]}\',')
 
-        daily_cards = doc.find_all([DK_STR_DAILY_CARD_TAG], class_ = DK_STR_DAILY_CARD_CLASS)
-
-        events = []
-        for day in daily_cards:
-            date = day.find([DK_STR_DAILY_CARD_DATE_TAG], class_ = DK_STR_DAILY_CARD_DATE_CLASS)
-            if not date:
-                continue
-
-            date = date.text
-            day_table = day.find([DK_STR_GAME_TABLE_TAG], class_ = DK_STR_GAME_TABLE_CLASS)
-
-            day_rows = day_table.find_all([DK_STR_GAME_TABLE_ROW_TAG])
-            for row in range(0, len(day_rows), 2):
-                start_time = ''
-
-                label = day_rows[row].find([DK_STR_SINGLE_GAME_START_TIME_TAG], class_ = DK_STR_SINGLE_GAME_START_TIME_CLASS)
-                if label:
-                    start_time = label.text
-                else:
-                    label = day_rows[row].find([DK_STR_SINGLE_GAME_STATUS_TAG], class_ = DK_STR_SINGLE_GAME_STATUS_CLASS)
-                    if label:
-                        start_time = f'Event in progress when spreadsheet was built ({label.find([DK_STR_SINGLE_GAME_TIME_TAG], class_ = DK_STR_SINGLE_GAME_TIME_CLASS).text} | {label.find([DK_STR_SINGLE_GAME_PERIOD_TAG], class_ = DK_STR_SINGLE_GAME_PERIOD_CLASS).text})'
-
-                event_id = day_rows[row].find([DK_STR_SINGLE_GAME_EVENT_LINK_TAG], class_ = DK_STR_SINGLE_GAME_EVENT_LINK_CLASS).attrs['href'].split('/', -1)[-1]
-                new_event = SingleEvent()
-                new_event.load_from_rows([day_rows[row], day_rows[row + 1]], date = date, time = start_time, event_id = event_id)
-                if new_event.game_date:
-                    new_event.sheet_name = url[2]
-                    events.append(new_event)
-
-                    for kenpom_event in kenpom_events:
-                        if kenpom_event.contains_team(new_event.home_team) and kenpom_event.contains_team(new_event.away_team):
-                            new_event.kenpom_event = kenpom_event
-                        elif kenpom_event.contains_team(new_event.home_team) or kenpom_event.contains_team(new_event.away_team):
-                            if new_event.home_team != kenpom_event.home_team:
-                                print(f'\'{kenpom_event.home_team}\': \'{new_event.home_team}\',')
-                            if new_event.away_team != kenpom_event.away_team:
-                                print(f'\'{kenpom_event.away_team}\': \'{new_event.away_team}\',')
-
-        # jmd testing: only work on a few events when testing
-        #events = events[0:2]
-        # jmd testing: pop off a couple of the early games as though they have already been played
-        #events = events[3:]
-        # jmd testing: add a new fake event in update mode
-        # if not args.new_spreadsheet:
-        #     new_event = SingleEvent()
-        #     new_event.event_id = '12345'
-        #     new_event.home_team = 'test new home team'
-        #     new_event.away_team = 'test new away team'
-        #     events.append(new_event)
-
-        all_events.append(events)
-
-        print(f'  Retrieved data for {len(events)} qualifying events')
+        print(f'  Retrieved data for {len(event_group.events)} qualifying events')
 
     if args.new_spreadsheet:
         gsu.create_new_spreadsheet_from_events(
             'KEEP GAMING',
-            all_events)
+            event_groups)
     else:
         gsu.update_spreadsheet_from_events(
             args.existing_spreadsheet,
-            all_events)
+            event_groups)
 
     return
 
@@ -356,6 +426,20 @@ if __name__ == '__main__':
         dest = 'existing_spreadsheet',
         default = '',
         help = 'Update the specified spreadsheet.')
+    parser.add_argument(
+        '--cfb',
+        action = 'store_true',
+        dest = 'cfb',
+        default = False,
+        help = 'Request CFB data'
+    )
+    parser.add_argument(
+        '--ncaam',
+        action = 'store_true',
+        dest = 'ncaam',
+        default = False,
+        help = 'Request NCAAM data'
+    )
 
     try:
         args = parser.parse_args()

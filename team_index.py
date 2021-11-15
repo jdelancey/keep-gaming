@@ -15,5 +15,12 @@ NAME_REPLACEMENT_DICT = {
     'Arkansas Pine Bluff': 'Arkansas-Pine Bluff',
     'Loyola MD': 'Loyola Maryland',
     'Southern Miss': 'Southern Mississippi',
-    'Louisiana': 'Louisiana-Lafayette'
+    'Louisiana': 'Louisiana-Lafayette',
+    'Prairie View A&M': 'Prairie View',
+    'Texas A&M Corpus Chris': 'A&M-Corpus Christi',
+    'Stephen F. Austin': 'SFA',
+    'Central Connecticut': 'Central Connecticut State',
+    'State Bonaventure': 'Saint Bonaventure',
+    'State Thomas': 'Saint Thomas MN',
+    'Alcorn State': 'Alcorn',
 }
