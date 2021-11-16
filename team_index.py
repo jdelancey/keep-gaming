@@ -1,3 +1,4 @@
+# kenpom is the key, standard (draftkings) is the value
 NAME_REPLACEMENT_DICT = {
     'East Tennessee State': 'ETSU',
     'Army': 'Army West Point',
@@ -23,4 +24,12 @@ NAME_REPLACEMENT_DICT = {
     'State Bonaventure': 'Saint Bonaventure',
     'State Thomas': 'Saint Thomas MN',
     'Alcorn State': 'Alcorn',
+    'Florida Gulf Coast': 'FGCU',
+    'UNC Wilmington': 'UNCW',
+    'Mount State Mary\'s': 'Mount Saint Marys',
+    'Southern': 'Southern University',
+    'Central Connecticut State': 'North Carolina State',
+    'N.C. State': 'North Carolina State',
+    'Cal Baptist': 'California Baptist',
+    'Gardner Webb': 'Gardner-Webb',
 }

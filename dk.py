@@ -81,6 +81,7 @@ class DraftKingsEventGroup:
         'sheet_id',
         'sheet_name',
         'events',
+        'skip_missing_moneyline',
         'include_kenpom',
         'names_to_update'
     ]
@@ -92,6 +93,7 @@ class DraftKingsEventGroup:
             self.__setattr__(slot, '')
 
         self.events = List[DraftKingsSingleEvent]
+        self.skip_missing_moneyline = False
         self.include_kenpom = False
         self.names_to_update = []
 
@@ -103,12 +105,14 @@ class DraftKingsEventGroup:
         url_params: str,
         sheet_id: int,
         sheet_name: str,
+        skip_missing_moneyline: bool,
         include_kenpom: bool):
 
         self.url = url
         self.url_params = url_params
         self.sheet_id = sheet_id
         self.sheet_name = sheet_name
+        self.skip_missing_moneyline = skip_missing_moneyline
         self.include_kenpom = include_kenpom
         self.names_to_update = []
 
@@ -158,7 +162,16 @@ class DraftKingsEventGroup:
                 event_id = day_rows[row].find([DK_STR_SINGLE_GAME_EVENT_LINK_TAG], class_ = DK_STR_SINGLE_GAME_EVENT_LINK_CLASS).attrs['href'].split('/', -1)[-1]
                 new_event = DraftKingsSingleEvent()
                 new_event.load_from_rows([day_rows[row], day_rows[row + 1]], date = date, time = start_time, event_id = event_id, in_progress = in_progress)
-                if new_event.game_date:
+
+                skip = False
+                if not new_event.game_date:
+                    skip = True
+
+                # jmd: temporary hack: only accept events that have a valid moneyline
+                if self.skip_missing_moneyline and new_event.home_team_moneyline == 0 and new_event.away_team_moneyline == 0:
+                    skip = True
+
+                if not skip:
                     self.events.append(new_event)
 
                     for kenpom_event in kenpom_events:
@@ -169,6 +182,11 @@ class DraftKingsEventGroup:
                                 self.names_to_update.append((kenpom_event.home_team, new_event.home_team))
                             if new_event.away_team != kenpom_event.away_team:
                                 self.names_to_update.append((kenpom_event.away_team, new_event.away_team))
+                else:
+                    game_time_string = f' ({new_event.game_date}, {new_event.game_time})' if (new_event.game_date and new_event.game_time) else ''
+                    event_url = f' - {new_event.create_event_url()}'
+                    print(f'Skipping incomplete event: {new_event.away_team} @ {new_event.home_team}{game_time_string}{event_url}')
+                    continue
 
         self.last_updated = f'{datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}'
         return True
@@ -276,22 +294,26 @@ class DraftKingsSingleEvent:
             under_odds = bottom_row_columns[1].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS )
             self.under_odds = float(under_odds.text) if under_odds else 0
 
-        self.game_date = kwargs['date'].strip() if 'date' in kwargs else ''
-        if self.game_date.lower() == 'today':
-            # check if it's past 7 pm eastern. if so, 'today' is really 'tomorrow' due to these coming back in utc
-            if datetime.datetime.now().time() > datetime.time(19, 0, 0):
-                self.game_date = (datetime.datetime.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
-            else:
-                # probably need a similar check here, too
-                self.game_date = datetime.date.today().strftime('%a %b %-d')
-        elif self.game_date.lower() == 'tomorrow':
-            self.game_date = (datetime.date.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
-        elif self.game_date:
-            self.game_date = self.game_date[0:-2]
+        self.in_progress = kwargs['in_progress'] if 'in_progress' in kwargs else False
+
+        if self.in_progress:
+            self.game_date = 'In Progress'
+        else:
+            self.game_date = kwargs['date'].strip() if 'date' in kwargs else ''
+            if self.game_date.lower() == 'today':
+                # check if it's past 7 pm eastern. if so, 'today' is really 'tomorrow' due to these coming back in utc
+                if datetime.datetime.now().time() > datetime.time(19, 0, 0):
+                    self.game_date = (datetime.datetime.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
+                else:
+                    # probably need a similar check here, too
+                    self.game_date = datetime.date.today().strftime('%a %b %-d')
+            elif self.game_date.lower() == 'tomorrow':
+                self.game_date = (datetime.date.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
+            elif self.game_date:
+                self.game_date = self.game_date[0:-2]
 
         self.game_time = kwargs['time'].strip() if 'time' in kwargs else ''
         self.event_id = kwargs['event_id'] if 'event_id' in kwargs else ''
-        self.in_progress = kwargs['in_progress'] if 'in_progress' in kwargs else False
         self.last_updated = f'{datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}'
 
         return
@@ -328,7 +350,7 @@ class DraftKingsSingleEvent:
         q = 1 - p
         k = (b * p - q) / b if b != 0 else 0
 
-        f = '{:.2f}'.format(k * 100)
+        f = '{:.2f}'.format(k)
         return float(f)
 
     def print(
@@ -339,7 +361,7 @@ class DraftKingsSingleEvent:
 
         print()
         print(f'Summary of {self.away_team} @ {self.home_team}{game_time_string}{event_url}')
-        print(f'  {str("Last Updated: ").ljust(15)}\t {datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}')
+        print(f'  {str("Updated: ").ljust(15)}\t {datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}')
         print(f'  {self.away_team.ljust(15)}\t {self.away_team_spread} ({self.away_team_odds})\t Moneyline: {self.away_team_moneyline}')
         print(f'  {self.home_team.ljust(15)}\t {self.home_team_spread} ({self.home_team_odds})\t Moneyline: {self.home_team_moneyline}')
         print(f'  {str("Over:").ljust(15)}\t {self.over_under} ({self.over_odds})')
@@ -353,9 +375,9 @@ class DraftKingsSingleEvent:
             k_away = self.calculate_kelly_criterion(self.away_team)
 
             if k_home > 0:
-                print(f'  Kelly: {self.home_team}: {k_home}%')
+                print(f'  Kelly: {self.home_team}: {k_home * 100}%')
             if k_away > 0:
-                print(f'  Kelly: {self.away_team}: {k_away}%')
+                print(f'  Kelly: {self.away_team}: {k_away * 100}%')
 
         return
 
@@ -364,9 +386,27 @@ def main(
 
     event_groups = []
     if args.cfb:
-        event_groups.append(DraftKingsEventGroup(CFB_URL, FULL_GAME_PARAMS, CFB_SHEET_INDEX, CFB_SHEET_NAME, False))
+        skip_missing_moneyline = False
+        include_kenpom = False
+        event_groups.append(DraftKingsEventGroup(
+            CFB_URL,
+            FULL_GAME_PARAMS,
+            CFB_SHEET_INDEX,
+            CFB_SHEET_NAME,
+            skip_missing_moneyline,
+            include_kenpom)
+        )
     if args.ncaam:
-        event_groups.append(DraftKingsEventGroup(NCAAM_URL, FULL_GAME_PARAMS, NCAAM_SHEET_INDEX, NCAAM_SHEET_NAME, True))
+        skip_missing_moneyline = True
+        include_kenpom = True
+        event_groups.append(DraftKingsEventGroup(
+            NCAAM_URL,
+            FULL_GAME_PARAMS,
+            NCAAM_SHEET_INDEX,
+            NCAAM_SHEET_NAME,
+            skip_missing_moneyline,
+            include_kenpom)
+        )
 
     if not event_groups:
         print('ERROR: At least one event group (CFB, NCAAM, etc.) must be specified; exiting.')

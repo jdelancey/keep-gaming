@@ -35,18 +35,21 @@ OVER_UNDER = 'O/U'
 OVER_UNDER_SPACER = ''
 BET_OVER_UNDER = 'Bet O/U?'
 LAST_BET_OVER_UNDER = 'LAST BET (O/U)'
-MONEYLINE = 'Moneyline'
-BET_MONEYLINE = 'Bet Moneyline?'
+MONEYLINE = 'ML'
+BET_MONEYLINE = 'Bet ML?'
 UPDATED = 'Updated ->'
 SPREAD_LATEST = 'Spread (Latest)'
 SPREAD_MOVEMENT = 'Spread Movement'
 OVER_UNDER_LATEST = 'O/U (Latest)'
 OVER_UNDER_MOVEMENT = 'O/U Movement'
-MONEYLINE_LATEST = 'Moneyline (Latest)'
-MONEYLINE_MOVEMENT = 'Moneyline Movement'
-KENPOM = 'KenPom Confidence'
-BEST_BET = 'Best Bet'
-KELLY = 'Kelly'
+MONEYLINE_LATEST = 'ML (Latest)'
+MONEYLINE_MOVEMENT = 'ML Movement'
+KENPOM_STARTING = 'KenPom (Starting)'
+BEST_BET_STARTING = 'Best Bet (Starting)'
+KELLY_STARTING = 'Kelly (Starting)'
+KENPOM_LATEST = 'KenPom (Latest)'
+BEST_BET_LATEST = 'Best Bet (Latest)'
+KELLY_LATEST = 'Kelly (Latest)'
 
 SHEET_COLUMNS = list(string.ascii_uppercase)
 SHEET_HEADER_COLUMN_ORDER = [
@@ -70,9 +73,12 @@ SHEET_HEADER_COLUMN_ORDER = [
     OVER_UNDER_MOVEMENT,
     MONEYLINE_LATEST,
     MONEYLINE_MOVEMENT,
-    KENPOM,
-    BEST_BET,
-    KELLY
+    KENPOM_STARTING,
+    BEST_BET_STARTING,
+    KELLY_STARTING,
+    KENPOM_LATEST,
+    BEST_BET_LATEST,
+    KELLY_LATEST
 ]
 
 def hex_to_rgb(
@@ -162,7 +168,7 @@ def add_header_row(
     if include_kenpom:
         values = [SHEET_HEADER_COLUMN_ORDER]
     else:
-        values = [SHEET_HEADER_COLUMN_ORDER[:-3]]
+        values = [SHEET_HEADER_COLUMN_ORDER[:-6]]
 
     body = {
         'values': values,
@@ -171,7 +177,7 @@ def add_header_row(
     start_column_int = 0
     end_column_int = len(SHEET_HEADER_COLUMN_ORDER) - 1
     if not include_kenpom:
-        end_column_int -= 3
+        end_column_int -= 6
 
     start_column = SHEET_COLUMNS[start_column_int]
     stop_column = SHEET_COLUMNS[end_column_int]
@@ -252,7 +258,7 @@ def add_header_row(
         body = body).execute()
 
     # initial population information
-    last_updated = f'Last Updated: {date.today()} {datetime.now().strftime("%H:%M:%S")}'
+    last_updated = f'Updated: {date.today()} {datetime.now().strftime("%H:%M:%S")}'
 
     # create cells and add text
     values = [[last_updated]]
@@ -260,10 +266,8 @@ def add_header_row(
         'values': values,
     }
 
-    start_column_int = 0
-    end_column_int = 1
-    start_column = SHEET_COLUMNS[start_column_int]
-    stop_column = SHEET_COLUMNS[end_column_int]
+    start_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MATCHUP)]
+    stop_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MATCHUP) + 1]
     row = 2 # 1-based
     sheets.values().update(
         spreadsheetId = spreadsheet_id,
@@ -280,8 +284,8 @@ def add_header_row(
                         'sheetId': sheet_id,
                         'startRowIndex': row - 1,
                         'endRowIndex': row,
-                        'startColumnIndex': 0,
-                        'endColumnIndex': 1
+                        'startColumnIndex': SHEET_HEADER_COLUMN_ORDER.index(MATCHUP),
+                        'endColumnIndex': SHEET_HEADER_COLUMN_ORDER.index(MATCHUP) + 1
                     },
                     'cell': {
                         'userEnteredFormat': {
@@ -296,18 +300,18 @@ def add_header_row(
                     'fields': 'userEnteredFormat(horizontalAlignment,verticalAlignment,wrapStrategy,textFormat)'
                 }
             },
-            {
-                'mergeCells': {
-                    'range': {
-                        'sheetId': sheet_id,
-                        'startRowIndex': row - 1,
-                        'endRowIndex': row,
-                        'startColumnIndex': 0,
-                        'endColumnIndex': 4
-                    },
-                    'mergeType': 'MERGE_ROWS'
-                }
-            }
+            # {
+            #     'mergeCells': {
+            #         'range': {
+            #             'sheetId': sheet_id,
+            #             'startRowIndex': row - 1,
+            #             'endRowIndex': row,
+            #             'startColumnIndex': 0,
+            #             'endColumnIndex': 4
+            #         },
+            #         'mergeType': 'MERGE_ROWS'
+            #     }
+            # }
         ]
     }
 
@@ -327,21 +331,24 @@ def add_event_rows(
 
     sheets = service.spreadsheets()
 
+    away_values = []
+    home_values = []
+    away_kelly_latest_values = [[]]
+    home_kelly_latest_values = [[]]
+
     if update:
         if event.in_progress:
-            start_column_int = SHEET_HEADER_COLUMN_ORDER.index(GAME_DATE)
-            end_column_int = SHEET_HEADER_COLUMN_ORDER.index(START_TIME)
-            values = [
+            start_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(GAME_DATE)]
+            stop_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(START_TIME)]
+            away_values = [
                 [
                     'IN PROGRESS',
                     event.game_time
                 ]
             ]
         else:
-            start_column_int = SHEET_HEADER_COLUMN_ORDER.index(UPDATED)
-            end_column_int = SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_MOVEMENT)
-            if event.kenpom_event:
-                end_column_int += 3
+            start_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(UPDATED)]
+            stop_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_MOVEMENT)]
 
             matchup_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MATCHUP)]
             starting_spread_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(SPREAD)]
@@ -350,10 +357,11 @@ def add_event_rows(
             latest_spread_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(SPREAD_LATEST)]
             latest_over_under_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(OVER_UNDER_LATEST)]
             latest_moneyline_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_LATEST)]
-            kelly_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(KELLY)]
+            kenpom_latest_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(KENPOM_LATEST)]
+            kelly_latest_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(KELLY_LATEST)]
 
             # away team row
-            values = [
+            away_values = [
                 [
                     event.last_updated,
                     event.away_team_spread,
@@ -365,30 +373,18 @@ def add_event_rows(
                 ]
             ]
 
+            away_kelly_latest_range = f'{sheet_name}!{kenpom_latest_column}{row}:{kelly_latest_column}{row}'
             if event.kenpom_event:
                 if event.away_team == event.kenpom_event.winning_team:
-                    values[0].append(event.kenpom_event.confidence)
+                    away_kelly_latest_values[0].append(event.kenpom_event.confidence)
                 else:
-                    values[0].append(1 - event.kenpom_event.confidence)
-                values[0].append(f'=IF({kelly_column}{row}>0,{matchup_column}{row},"")')
-                values[0].append(event.calculate_kelly_criterion(event.away_team))
-
-        start_column = SHEET_COLUMNS[start_column_int]
-        stop_column = SHEET_COLUMNS[end_column_int]
-
-        body = {
-            'values': values,
-        }
-
-        sheets.values().update(
-            spreadsheetId = spreadsheet_id,
-            body = body,
-            range = f'{sheet_name}!{start_column}{row}:{stop_column}{row}',
-            valueInputOption = 'USER_ENTERED').execute()
+                    away_kelly_latest_values[0].append(1 - event.kenpom_event.confidence)
+                away_kelly_latest_values[0].append(f'=IF({kelly_latest_column}{row}>0,{matchup_column}{row},"")')
+                away_kelly_latest_values[0].append(event.calculate_kelly_criterion(event.away_team))
 
         if not event.in_progress:
             # home team row
-            values = [
+            home_values = [
                 [
                     event.last_updated,
                     event.home_team_spread,
@@ -400,38 +396,26 @@ def add_event_rows(
                 ]
             ]
 
+            home_kelly_latest_range = f'{sheet_name}!{kenpom_latest_column}{row + 1}:{kelly_latest_column}{row + 1}'
             if event.kenpom_event:
                 if event.home_team == event.kenpom_event.winning_team:
-                    values[0].append(event.kenpom_event.confidence)
+                    home_kelly_latest_values[0].append(event.kenpom_event.confidence)
                 else:
-                    values[0].append(1 - event.kenpom_event.confidence)
-                values[0].append(f'=IF({kelly_column}{row + 1}>0,{matchup_column}{row + 1},"")')
-                values[0].append(event.calculate_kelly_criterion(event.home_team))
-
-            body = {
-                'values': values,
-            }
-
-            sheets.values().update(
-                spreadsheetId = spreadsheet_id,
-                body = body,
-                range = f'{sheet_name}!{start_column}{row + 1}:{stop_column}{row + 1}',
-                valueInputOption = 'USER_ENTERED').execute()
+                    home_kelly_latest_values[0].append(1 - event.kenpom_event.confidence)
+                home_kelly_latest_values[0].append(f'=IF({kelly_latest_column}{row + 1}>0,{matchup_column}{row + 1},"")')
+                home_kelly_latest_values[0].append(event.calculate_kelly_criterion(event.home_team))
     else:
-        start_column_int = 0
-        end_column_int = SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_MOVEMENT)
-        if event.kenpom_event:
-            end_column_int += 3
-        start_column = SHEET_COLUMNS[start_column_int]
-        stop_column = SHEET_COLUMNS[end_column_int]
+        start_column = SHEET_COLUMNS[0]
+        stop_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_MOVEMENT)]
 
         matchup_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MATCHUP)]
-        kelly_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(KELLY)]
+        kelly_starting_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(KELLY_STARTING)]
+        kelly_latest_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(KELLY_LATEST)]
 
         # away team row
-        values = [
+        away_values = [
             [
-                f'{DK_STR_EVENTS_URL}/{event.event_id}',
+                f'=HYPERLINK("{event.create_event_url()}","LINK")',
                 event.game_date,
                 event.game_time,
                 event.away_team,
@@ -456,28 +440,25 @@ def add_event_rows(
 
         if event.kenpom_event:
             if event.away_team == event.kenpom_event.winning_team:
-                values[0].append(event.kenpom_event.confidence)
+                away_values[0].append(event.kenpom_event.confidence)
             else:
-                values[0].append(1 - event.kenpom_event.confidence)
-            values[0].append(f'=IF({kelly_column}{row}>0,{matchup_column}{row},"")')
-            values[0].append(event.calculate_kelly_criterion(event.away_team))
-
-        body = {
-            'values': values,
-        }
-
-        sheets.values().update(
-            spreadsheetId = spreadsheet_id,
-            body = body,
-            range = f'{sheet_name}!{start_column}{row}:{stop_column}{row}',
-            valueInputOption = 'USER_ENTERED').execute()
+                away_values[0].append(1 - event.kenpom_event.confidence)
+            away_values[0].append(f'=IF({kelly_starting_column}{row}>0,{matchup_column}{row},"")') # best bet starting
+            away_values[0].append(event.calculate_kelly_criterion(event.away_team)) # kelly starting
+            if event.away_team == event.kenpom_event.winning_team:
+                away_values[0].append(event.kenpom_event.confidence)
+            else:
+                away_values[0].append(1 - event.kenpom_event.confidence)
+            away_values[0].append(f'=IF({kelly_latest_column}{row}>0,{matchup_column}{row},"")') # best bet latest
+            away_values[0].append(event.calculate_kelly_criterion(event.away_team)) # kelly latest
+            stop_column = kelly_latest_column
 
         # home team row
-        values = [
+        home_values = [
             [
-                f'{DK_STR_EVENTS_URL}/{event.event_id}',
-                event.game_date,
-                event.game_time,
+                '', # merged
+                '', # merged
+                '', # merged
                 event.home_team,
                 event.home_team_spread,
                 '', # checkbox for bet spread
@@ -500,21 +481,60 @@ def add_event_rows(
 
         if event.kenpom_event:
             if event.home_team == event.kenpom_event.winning_team:
-                values[0].append(event.kenpom_event.confidence)
+                home_values[0].append(event.kenpom_event.confidence)
             else:
-                values[0].append(1 - event.kenpom_event.confidence)
-            values[0].append(f'=IF({kelly_column}{row + 1}>0,{matchup_column}{row + 1},"")')
-            values[0].append(event.calculate_kelly_criterion(event.home_team))
+                home_values[0].append(1 - event.kenpom_event.confidence)
+            home_values[0].append(f'=IF({kelly_starting_column}{row + 1}>0,{matchup_column}{row + 1},"")') # best bet starting
+            home_values[0].append(event.calculate_kelly_criterion(event.home_team)) # kelly starting
+            if event.home_team == event.kenpom_event.winning_team:
+                home_values[0].append(event.kenpom_event.confidence)
+            else:
+                home_values[0].append(1 - event.kenpom_event.confidence)
+            home_values[0].append(f'=IF({kelly_latest_column}{row + 1}>0,{matchup_column}{row + 1},"")') # best bet latest
+            home_values[0].append(event.calculate_kelly_criterion(event.home_team)) # kelly latest
+            stop_column = kelly_latest_column
 
-        body = {
-            'values': values,
-        }
+    away_range = f'{sheet_name}!{start_column}{row}:{stop_column}{row}'
+    home_range = f'{sheet_name}!{start_column}{row + 1}:{stop_column}{row + 1}'
 
-        sheets.values().update(
-            spreadsheetId = spreadsheet_id,
-            body = body,
-            range = f'{sheet_name}!{start_column}{row + 1}:{stop_column}{row + 1}',
-            valueInputOption = 'USER_ENTERED').execute()
+    data = []
+    if away_values:
+        data.append(
+            {
+                'range': away_range,
+                'values': away_values
+            }
+        )
+    if home_values:
+        data.append(
+            {
+                'range': home_range,
+                'values': home_values
+            }
+        )
+    if away_kelly_latest_values[0]:
+        data.append(
+            {
+                'range': away_kelly_latest_range,
+                'values': away_kelly_latest_values
+            }
+        )
+    if home_kelly_latest_values[0]:
+        data.append(
+            {
+                'range': home_kelly_latest_range,
+                'values': home_kelly_latest_values
+            }
+        )
+
+    body = {
+        'data': data,
+        'valueInputOption': 'USER_ENTERED'
+    }
+
+    sheets.values().batchUpdate(
+        spreadsheetId = spreadsheet_id,
+        body = body).execute()
 
     return True
 
@@ -727,6 +747,34 @@ def create_format_movement_column_request(
         italic,
         show_plus_minus)
 
+def create_format_kenpom_column_request(
+    sheet_id: int,
+    starting_row: int,
+    starting_column: int,
+    ending_column: int) -> List[dict]:
+
+    request = {
+        'repeatCell': {
+            'cell': {
+                'userEnteredFormat': {
+                    'numberFormat': {
+                        'type': 'PERCENT',
+                        #'pattern': '#.000%'
+                    }
+                }
+            },
+            'range': {
+                'sheetId': sheet_id,
+                'startRowIndex': starting_row,
+                'startColumnIndex': starting_column,
+                'endColumnIndex': ending_column
+            },
+            'fields': 'userEnteredFormat(numberFormat)'
+        }
+    }
+
+    return [request]
+
 def create_format_team_colors_request(
     sheet_id: int,
     event: DraftKingsSingleEvent,
@@ -851,7 +899,8 @@ def create_format_event_alignment_request(
 
 def create_format_borders_request(
     sheet_id: int,
-    starting_row: int) -> List[dict]:
+    starting_row: int,
+    include_kenpom: bool) -> List[dict]:
 
     thick_border = {
         'style': 'SOLID_THICK',
@@ -958,7 +1007,44 @@ def create_format_borders_request(
         }
     }
 
-    return [spread_request, over_under_request, moneyline_request, latest_spread_request, latest_over_under_request, latest_moneyline_request]
+    starting_kenpom_request = {
+        'updateBorders': {
+            'range': {
+                'sheetId': sheet_id,
+                'startRowIndex': starting_row - 1,
+                'endRowIndex': starting_row + 1,
+                'startColumnIndex': SHEET_HEADER_COLUMN_ORDER.index(KENPOM_STARTING),
+                'endColumnIndex': SHEET_HEADER_COLUMN_ORDER.index(KELLY_STARTING) + 1
+            },
+            'top': thick_border,
+            'bottom': thick_border,
+            'left': thick_border,
+            'right': thick_border
+        }
+    }
+
+    latest_kenpom_request = {
+        'updateBorders': {
+            'range': {
+                'sheetId': sheet_id,
+                'startRowIndex': starting_row - 1,
+                'endRowIndex': starting_row + 1,
+                'startColumnIndex': SHEET_HEADER_COLUMN_ORDER.index(KENPOM_LATEST),
+                'endColumnIndex': SHEET_HEADER_COLUMN_ORDER.index(KELLY_LATEST) + 1
+            },
+            'top': thick_border,
+            'bottom': thick_border,
+            'left': thick_border,
+            'right': thick_border
+        }
+    }
+
+    requests = [spread_request, over_under_request, moneyline_request, latest_spread_request, latest_over_under_request, latest_moneyline_request]
+    if include_kenpom:
+        requests.append(starting_kenpom_request)
+        requests.append(latest_kenpom_request)
+
+    return requests
 
 def create_format_obsolete_event_request(
     sheet_id: int,
@@ -1392,15 +1478,12 @@ def update_last_updated(
 
     sheets = service.spreadsheets()
 
-    values = [f'Last Updated: {last_updated}']
+    values = [f'Updated: {last_updated}']
     body = {
         'values': [values],
     }
 
-    start_column_int = 0
-    end_column_int = 1
-    start_column = SHEET_COLUMNS[start_column_int]
-    stop_column = SHEET_COLUMNS[end_column_int]
+    start_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MATCHUP)]
 
     row = 2 # 1-based
     sheets.values().update(
@@ -1480,7 +1563,8 @@ def format_event_rows(
     if not update:
         format_borders_request = create_format_borders_request(
             sheet_id,
-            starting_row)
+            starting_row,
+            event.kenpom_event is not None)
 
         for request in format_borders_request:
             requests.append(request)
@@ -1499,7 +1583,8 @@ def format_event_rows(
 def format_all_value_columns(
     service: Resource,
     spreadsheet_id: str,
-    sheet_id: int) -> bool:
+    sheet_id: int,
+    format_kenpom: bool) -> bool:
 
     sheets = service.spreadsheets()
 
@@ -1531,7 +1616,8 @@ def format_all_value_columns(
     indices = [
         SHEET_HEADER_COLUMN_ORDER.index(OVER_UNDER),
         SHEET_HEADER_COLUMN_ORDER.index(OVER_UNDER_SPACER),
-        SHEET_HEADER_COLUMN_ORDER.index(OVER_UNDER_LATEST)
+        SHEET_HEADER_COLUMN_ORDER.index(OVER_UNDER_LATEST),
+        SHEET_HEADER_COLUMN_ORDER.index(LAST_BET_OVER_UNDER)
     ]
     for i in indices:
         format_values = create_format_starting_value_column_request(
@@ -1544,7 +1630,7 @@ def format_all_value_columns(
         for request in format_values:
             requests.append(request)
 
-    # format line movement columns 13,15,17
+    # format line movement columns
     indices = [
         SHEET_HEADER_COLUMN_ORDER.index(SPREAD_MOVEMENT),
         SHEET_HEADER_COLUMN_ORDER.index(OVER_UNDER_MOVEMENT),
@@ -1559,6 +1645,23 @@ def format_all_value_columns(
 
         for request in format_movement:
             requests.append(request)
+
+    if format_kenpom:
+        indices = [
+            SHEET_HEADER_COLUMN_ORDER.index(KENPOM_STARTING),
+            SHEET_HEADER_COLUMN_ORDER.index(KENPOM_LATEST),
+            SHEET_HEADER_COLUMN_ORDER.index(KELLY_STARTING),
+            SHEET_HEADER_COLUMN_ORDER.index(KELLY_LATEST)
+        ]
+        for i in indices:
+            format_kenpom = create_format_kenpom_column_request(
+                sheet_id,
+                starting_row - 1,
+                i,
+                i + 1)
+
+            for request in format_kenpom:
+                requests.append(request)
 
     body = {
         'requests': requests
@@ -1651,7 +1754,8 @@ def format_sheet(
     sheet_id: int,
     sheet_name: str,
     last_updated: str,
-    update: bool) -> bool:
+    update: bool,
+    format_kenpom: bool) -> bool:
 
     if not update:
         format_conditional_formatting(
@@ -1659,10 +1763,11 @@ def format_sheet(
             spreadsheet_id,
             sheet_id)
 
-        format_all_value_columns(
-            service,
-            spreadsheet_id,
-            sheet_id)
+    format_all_value_columns(
+        service,
+        spreadsheet_id,
+        sheet_id,
+        format_kenpom)
     #jmd: end if not update block
 
     format_auto_column_width(
@@ -1808,7 +1913,8 @@ def create_new_spreadsheet_from_events(
             sheet_id,
             sheet_name,
             event_group.last_updated,
-            update
+            update,
+            include_kenpom
         )
 
     print(f'Spreadsheet has been created and is available at: {create_spreadsheet_url(spreadsheet_id)}')
@@ -1850,12 +1956,12 @@ def update_spreadsheet_from_events(
             # if the event is in progress, do not update it. leave it in its
             # last state ("closing" lines, or as close as we came on the last
             # update before the event started)
-            if event.in_progress:
-                print(f'Skipped update for in-progress event: {event.away_team} @ {event.home_team} ({event_index}/{event_count})')
-                if event.event_id in event_ids:
-                    del event_ids[event.event_id]
-                event_index += 1
-                continue
+            # if event.in_progress:
+            #     print(f'Skipped update for in-progress event: {event.away_team} @ {event.home_team} ({event_index}/{event_count})')
+            #     if event.event_id in event_ids:
+            #         del event_ids[event.event_id]
+            #     event_index += 1
+            #     continue
 
             if event.event_id in event_ids:
                 row = event_ids[event.event_id] + 1 # i hate everything
@@ -1928,7 +2034,8 @@ def update_spreadsheet_from_events(
             sheet_id,
             sheet_name,
             event_group.last_updated,
-            update
+            update,
+            event_group.include_kenpom
         )
 
         sheet_id += 1
@@ -1946,7 +2053,8 @@ def get_event_ids_from_sheet(
     requested_range = f'{sheet_name}!A:A'
     request = service.spreadsheets().values().get(
         spreadsheetId = spreadsheet_id,
-        range = requested_range)
+        range = requested_range,
+        valueRenderOption = 'FORMULA') # needed to return the hyperlink formula, not its rendered value of "LINK"
     response = request.execute()
 
     event_ids = {}
@@ -1954,7 +2062,12 @@ def get_event_ids_from_sheet(
     values = response['values'][2:]
     for row in values:
         if len(row) > 0:
+            # original format was just plain text
             event_id = row[0].rsplit('/', 1)[1]
+
+            # account for new format with =HYPERLINK("URL","NAME")
+            if '"LINK"' in event_id:
+                event_id = event_id.split('"', 1)[0]
             event_ids[event_id] = row_index
         row_index += 1
 
