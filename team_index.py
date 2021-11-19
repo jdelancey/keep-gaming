@@ -32,4 +32,11 @@ NAME_REPLACEMENT_DICT = {
     'N.C. State': 'North Carolina State',
     'Cal Baptist': 'California Baptist',
     'Gardner Webb': 'Gardner-Webb',
+    'State Francis NY': 'Saint Francis Brooklyn',
+    'State Francis PA': 'Saint Francis PA',
+    'McNeese State': 'McNeese',
+    'Cal State Bakersfield': 'CSU Bakersfield',
+    'Cal State Northridge': 'CSUN',
+    'Tennessee Martin': 'UT Martin',
+    'Maryland Eastern Shore': 'UMES',
 }
