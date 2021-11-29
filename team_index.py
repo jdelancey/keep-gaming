@@ -40,4 +40,5 @@ NAME_REPLACEMENT_DICT = {
     'Tennessee Martin': 'UT Martin',
     'Maryland Eastern Shore': 'UMES',
     'Loyola Marymount': 'LMU',
+    'Mississippi Valley State': 'Mississippi Valley',
 }
