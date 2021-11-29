@@ -39,4 +39,5 @@ NAME_REPLACEMENT_DICT = {
     'Cal State Northridge': 'CSUN',
     'Tennessee Martin': 'UT Martin',
     'Maryland Eastern Shore': 'UMES',
+    'Loyola Marymount': 'LMU',
 }
