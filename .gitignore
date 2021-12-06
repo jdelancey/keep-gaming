@@ -3,3 +3,4 @@ __pycache__/
 keys/
 kenpom_credentials.py
 geckodriver.log
+db/

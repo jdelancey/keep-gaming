@@ -41,4 +41,7 @@ NAME_REPLACEMENT_DICT = {
     'Maryland Eastern Shore': 'UMES',
     'Loyola Marymount': 'LMU',
     'Mississippi Valley State': 'Mississippi Valley',
+    'Connecticut': 'UConn',
+    'Nebraska Omaha': 'Omaha',
+    'Saint Joseph\'s': 'Saint Josephs',
 }

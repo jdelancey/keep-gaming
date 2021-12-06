@@ -3,9 +3,11 @@
 import argparse
 from bs4 import BeautifulSoup as bs
 import datetime
+from pymongo import MongoClient
 import requests
 from typing import List
 
+import event
 import google_sheets_utils as gsu
 import kenpom
 
@@ -58,8 +60,6 @@ FULL_GAME_PARAMS = {'category': 'game-lines', 'subcategory': 'game'}
 CFB_URL = 'https://sportsbook.draftkings.com/leagues/football/88670775' #?category=game-lines&subcategory=game'
 CFB_SHEET_NAME = 'CFB: DraftKings (Full Game)'
 
-#CFB_FIRST_HALF_URL = 'https://sportsbook.draftkings.com/leagues/football/88670775' #?category=halves'
-
 NCAAM_URL = 'https://sportsbook.draftkings.com/leagues/basketball/88670771' #?category=game-lines&subcategory=game
 NCAAM_SHEET_NAME = 'NCAAM: DraftKings (Full Game)'
 
@@ -70,6 +70,156 @@ CFB_SHEET_INDEX = 0
 NCAAM_SHEET_INDEX = 1
 
 REQUEST_TIMEOUT = 5
+
+class DraftKingsSingleEvent(event.SingleEvent):
+    '''A single event (game) including basic gambling information.'''
+
+    __slots__ = [
+        'last_updated',
+        'event_id',
+        'game_date',
+        'game_time',
+        'in_progress',
+        'away_team',
+        'home_team',
+        'betting_lines',
+        'betting_choices',
+        'outcome',
+        'sheet_name',
+        'database'
+    ]
+
+    def __init__(
+        self,
+        database):
+
+        for slot in self.__slots__:
+            self.__setattr__(slot, '')
+
+        self.betting_lines = []
+        self.betting_choices = event.BettingChoices()
+        self.outcome = None
+        self.database = database
+
+        return
+
+    def create_event_url(
+        self) -> str:
+
+        return f'{DK_STR_EVENTS_URL}/{self.event_id}' if self.event_id else ''
+
+    def update_from_rows(
+        self,
+        rows: List[bs],
+        **kwargs) -> None:
+
+        # we do not want to update in-progress events. this allows us to
+        # retain the last update as the closing lines for the event.
+        self.in_progress = kwargs['in_progress'] if 'in_progress' in kwargs else False
+        if self.in_progress:
+            return
+
+        # this event_id is unique to this event and is used to generate
+        # the link back to the event page on draftkings. we only need to
+        # set it once, as it will never change.
+        if not self.event_id:
+            if 'event_id' in kwargs:
+                self.event_id = kwargs['event_id']
+
+        # we only need to update the team names once.
+        if not self.away_team or not self.home_team:
+            teams = list(map(lambda t: t.find_all([DK_STR_TEAMS_TAG], class_ = DK_STR_TEAMS_CLASS), rows))
+            if len(teams) != 2:
+                return
+
+            self.away_team = teams[0][0].text
+            self.home_team = teams[1][0].text
+
+        # the top row is the away team, and the bottom row is the home
+        # team. the top row also holds the over data, and the bottom row
+        # also holds the under data.
+        top_row = rows[0]
+        bottom_row = rows[1]
+
+        top_row_columns = top_row.find_all([DK_STR_GAME_TABLE_ROW_COLUMN_TAG], class_ = [DK_STR_GAME_TABLE_ROW_COLUMN_CLASS, DK_STR_GAME_TABLE_EMPTY_CELL])
+        bottom_row_columns = bottom_row.find_all([DK_STR_GAME_TABLE_ROW_COLUMN_TAG], class_ = [DK_STR_GAME_TABLE_ROW_COLUMN_CLASS, DK_STR_GAME_TABLE_EMPTY_CELL])
+
+        new_betting_lines = event.EventLines()
+        away_spread = 0
+        if len(top_row_columns) > 0:
+            spread = top_row_columns[0].find([DK_STR_GAME_TABLE_SPREAD_TAG], class_ = DK_STR_GAME_TABLE_SPREAD_CLASS)
+            away_spread = spread.text if spread else 0
+        new_betting_lines.away_team_spread = float(away_spread) if away_spread != 'pk' else 0
+
+        odds = 0
+        if len(top_row_columns) > 0:
+            odds = top_row_columns[0].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS)
+            new_betting_lines.away_team_odds = float(odds.text) if odds else 0
+        new_betting_lines.away_team_moneyline = 0
+        if len(top_row_columns) > 2:
+            new_betting_lines.away_team_moneyline = float(top_row_columns[2].text) if top_row_columns[2].text else 0
+
+        home_spread = 0
+        if len(bottom_row_columns) > 0:
+            spread = bottom_row_columns[0].find([DK_STR_GAME_TABLE_SPREAD_TAG], class_ = DK_STR_GAME_TABLE_SPREAD_CLASS)
+            home_spread = spread.text if spread else 0
+        new_betting_lines.home_team_spread = float(home_spread) if home_spread != 'pk' else 0
+
+        odds = 0
+        if len(bottom_row_columns) > 0:
+            odds = bottom_row_columns[0].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS)
+        new_betting_lines.home_team_odds = float(odds.text) if odds else 0
+        new_betting_lines.home_team_moneyline = 0
+        if len(bottom_row_columns) > 2:
+            new_betting_lines.home_team_moneyline = float(bottom_row_columns[2].text) if bottom_row_columns[2].text else 0
+
+        new_betting_lines.over_under = 0
+        new_betting_lines.over_odds = 0
+        new_betting_lines.under_odds = 0
+
+        if len(top_row_columns) > 1:
+            new_betting_lines.over_under = top_row_columns[1].find([DK_STR_GAME_TABLE_OVER_UNDER_TAG], class_ = DK_STR_GAME_TABLE_OVER_UNDER_CLASS)
+            if new_betting_lines.over_under:
+                new_betting_lines.over_under = float(new_betting_lines.over_under.text)
+
+        if len(top_row_columns) > 1:
+            over_odds = top_row_columns[1].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS)
+            new_betting_lines.over_odds = float(over_odds.text) if over_odds else 0
+
+        if len(bottom_row_columns) > 1:
+            under_odds = bottom_row_columns[1].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS )
+            new_betting_lines.under_odds = float(under_odds.text) if under_odds else 0
+
+        # if we have not set the game date yet, do so now. we want to
+        # convert text like 'today' and 'tomorrow' into absolute dates.
+        # we also need to account for some bullshit time zone issues, as
+        # it appears that we get times back in zulu/utc. one day i'll
+        # fix this properly, but it seems to work with this approach for
+        # now.
+        if not self.game_date:
+            self.game_date = kwargs['date'].strip() if 'date' in kwargs else ''
+            if self.game_date.lower() == 'today':
+                # check if it's past 7 pm eastern. if so, 'today' is really 'tomorrow'
+                if datetime.datetime.now().time() > datetime.time(19, 0, 0):
+                    self.game_date = (datetime.datetime.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
+                else:
+                    # probably need a similar check here, too
+                    self.game_date = datetime.date.today().strftime('%a %b %-d')
+            elif self.game_date.lower() == 'tomorrow':
+                self.game_date = (datetime.date.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
+            elif self.game_date:
+                self.game_date = self.game_date[0:-2]
+
+        if not self.game_time:
+            if 'time' in kwargs:
+                self.game_time = kwargs['time'].strip()
+
+        last_updated = f'{datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}'
+        new_betting_lines.last_updated = last_updated
+        self.add_update(new_betting_lines)
+
+        return
+
 
 class DraftKingsEventGroup:
     '''A single category of events for a single sport/event type.'''
@@ -83,21 +233,10 @@ class DraftKingsEventGroup:
         'events',
         'skip_missing_moneyline',
         'include_kenpom',
-        'names_to_update'
+        'names_to_update',
+        'database_name',
+        'database'
     ]
-
-    def __init__(
-        self):
-
-        for slot in self.__slots__:
-            self.__setattr__(slot, '')
-
-        self.events = List[DraftKingsSingleEvent]
-        self.skip_missing_moneyline = False
-        self.include_kenpom = False
-        self.names_to_update = []
-
-        return
 
     def __init__(
         self,
@@ -106,7 +245,9 @@ class DraftKingsEventGroup:
         sheet_id: int,
         sheet_name: str,
         skip_missing_moneyline: bool,
-        include_kenpom: bool):
+        include_kenpom: bool,
+        database_client,
+        database_name: str):
 
         self.url = url
         self.url_params = url_params
@@ -115,10 +256,12 @@ class DraftKingsEventGroup:
         self.skip_missing_moneyline = skip_missing_moneyline
         self.include_kenpom = include_kenpom
         self.names_to_update = []
+        self.database_name = database_name
+        self.database = database_client.get_database(database_name)
 
         return
 
-    def load(
+    def load_from_url(
         self,
         **kwargs) -> bool:
 
@@ -146,6 +289,8 @@ class DraftKingsEventGroup:
             day_table = day.find([DK_STR_GAME_TABLE_TAG], class_ = DK_STR_GAME_TABLE_CLASS)
 
             day_rows = day_table.find_all([DK_STR_GAME_TABLE_ROW_TAG])
+            #jmd: only run a few games
+            #day_rows = day_rows[0:6]
             for row in range(0, len(day_rows), 2):
                 start_time = ''
                 in_progress = False
@@ -160,28 +305,39 @@ class DraftKingsEventGroup:
                         in_progress = True
 
                 event_id = day_rows[row].find([DK_STR_SINGLE_GAME_EVENT_LINK_TAG], class_ = DK_STR_SINGLE_GAME_EVENT_LINK_CLASS).attrs['href'].split('/', -1)[-1]
-                new_event = DraftKingsSingleEvent()
-                new_event.load_from_rows([day_rows[row], day_rows[row + 1]], date = date, time = start_time, event_id = event_id, in_progress = in_progress)
+
+                new_event = DraftKingsSingleEvent(self.database)
+                _ = event.populate_event_from_database(
+                    self.database,
+                    new_event,
+                    event_id)
+
+                new_event.update_from_rows([day_rows[row], day_rows[row + 1]], date = date, time = start_time, event_id = event_id, in_progress = in_progress)
+                new_event.sheet_name = self.sheet_name
 
                 skip = False
                 if not new_event.game_date:
                     skip = True
 
                 # jmd: temporary hack: only accept events that have a valid moneyline
-                if self.skip_missing_moneyline and new_event.home_team_moneyline == 0 and new_event.away_team_moneyline == 0:
-                    skip = True
+                if self.skip_missing_moneyline:
+                    if new_event.betting_lines:
+                        if new_event.betting_lines[0].home_team_moneyline == 0 and new_event.betting_lines[0].away_team_moneyline == 0:
+                            skip = True
 
                 if not skip:
                     self.events.append(new_event)
 
                     for kenpom_event in kenpom_events:
                         if kenpom_event.contains_team(new_event.home_team) and kenpom_event.contains_team(new_event.away_team):
-                            new_event.kenpom_event = kenpom_event
+                            new_event.betting_lines[-1].kenpom_event = kenpom_event if new_event.betting_lines else None
                         elif kenpom_event.contains_team(new_event.home_team) or kenpom_event.contains_team(new_event.away_team):
                             if new_event.home_team != kenpom_event.home_team:
                                 self.names_to_update.append((kenpom_event.home_team, new_event.home_team))
                             if new_event.away_team != kenpom_event.away_team:
                                 self.names_to_update.append((kenpom_event.away_team, new_event.away_team))
+
+                    new_event.update_database()
                 else:
                     game_time_string = f' ({new_event.game_date}, {new_event.game_time})' if (new_event.game_date and new_event.game_time) else ''
                     event_url = f' - {new_event.create_event_url()}'
@@ -192,197 +348,10 @@ class DraftKingsEventGroup:
         return True
 
 
-class DraftKingsSingleEvent:
-    '''A single event (game) including basic gambling information.'''
-
-    __slots__ = [
-        'last_updated',
-        'event_id',
-        'game_date',
-        'game_time',
-        'in_progress',
-        'away_team',
-        'away_team_spread',
-        'away_team_odds',
-        'away_team_moneyline',
-        'home_team',
-        'home_team_spread',
-        'home_team_odds',
-        'home_team_moneyline',
-        'over_under',
-        'over_odds',
-        'under_odds',
-        'sheet_name',
-        'kenpom_event'
-    ]
-
-    def __init__(
-        self):
-
-        for slot in self.__slots__:
-            self.__setattr__(slot, '')
-
-        self.kenpom_event = None
-
-        return
-
-    def create_event_url(
-        self) -> str:
-
-        return f'{DK_STR_EVENTS_URL}/{self.event_id}' if self.event_id else ''
-
-    def load_from_rows(
-        self,
-        rows: List[bs],
-        **kwargs):
-
-        teams = list(map(lambda t: t.find_all([DK_STR_TEAMS_TAG], class_ = DK_STR_TEAMS_CLASS), rows))
-        if len(teams) != 2:
-            return
-
-        self.away_team = teams[0][0].text
-        self.home_team = teams[1][0].text
-
-        top_row = rows[0]
-        bottom_row = rows[1]
-
-        top_row_columns = top_row.find_all([DK_STR_GAME_TABLE_ROW_COLUMN_TAG], class_ = [DK_STR_GAME_TABLE_ROW_COLUMN_CLASS, DK_STR_GAME_TABLE_EMPTY_CELL])
-        bottom_row_columns = bottom_row.find_all([DK_STR_GAME_TABLE_ROW_COLUMN_TAG], class_ = [DK_STR_GAME_TABLE_ROW_COLUMN_CLASS, DK_STR_GAME_TABLE_EMPTY_CELL])
-
-        away_spread = 0
-        if len(top_row_columns) > 0:
-            spread = top_row_columns[0].find([DK_STR_GAME_TABLE_SPREAD_TAG], class_ = DK_STR_GAME_TABLE_SPREAD_CLASS)
-            away_spread = spread.text if spread else 0
-        self.away_team_spread = float(away_spread) if away_spread != 'pk' else 0
-
-        odds = 0
-        if len(top_row_columns) > 0:
-            odds = top_row_columns[0].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS)
-            self.away_team_odds = float(odds.text) if odds else 0
-        self.away_team_moneyline = 0
-        if len(top_row_columns) > 2:
-            self.away_team_moneyline = float(top_row_columns[2].text) if top_row_columns[2].text else 0
-
-        home_spread = 0
-        if len(bottom_row_columns) > 0:
-            spread = bottom_row_columns[0].find([DK_STR_GAME_TABLE_SPREAD_TAG], class_ = DK_STR_GAME_TABLE_SPREAD_CLASS)
-            home_spread = spread.text if spread else 0
-        self.home_team_spread = float(home_spread) if home_spread != 'pk' else 0
-
-        odds = 0
-        if len(bottom_row_columns) > 0:
-            odds = bottom_row_columns[0].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS)
-        self.home_team_odds = float(odds.text) if odds else 0
-        self.home_team_moneyline = 0
-        if len(bottom_row_columns) > 2:
-            self.home_team_moneyline = float(bottom_row_columns[2].text) if bottom_row_columns[2].text else 0
-
-        self.over_under = 0
-        self.over_odds = 0
-        self.under_odds = 0
-
-        if len(top_row_columns) > 1:
-            self.over_under = top_row_columns[1].find([DK_STR_GAME_TABLE_OVER_UNDER_TAG], class_ = DK_STR_GAME_TABLE_OVER_UNDER_CLASS)
-            if self.over_under:
-                self.over_under = float(self.over_under.text)
-
-        if len(top_row_columns) > 1:
-            over_odds = top_row_columns[1].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS)
-            self.over_odds = float(over_odds.text) if over_odds else 0
-
-        if len(bottom_row_columns) > 1:
-            under_odds = bottom_row_columns[1].find([DK_STR_GAME_TABLE_ODDS_TAG], class_ = DK_STR_GAME_TABLE_ODDS_CLASS )
-            self.under_odds = float(under_odds.text) if under_odds else 0
-
-        self.in_progress = kwargs['in_progress'] if 'in_progress' in kwargs else False
-
-        if self.in_progress:
-            self.game_date = 'In Progress'
-        else:
-            self.game_date = kwargs['date'].strip() if 'date' in kwargs else ''
-            if self.game_date.lower() == 'today':
-                # check if it's past 7 pm eastern. if so, 'today' is really 'tomorrow' due to these coming back in utc
-                if datetime.datetime.now().time() > datetime.time(19, 0, 0):
-                    self.game_date = (datetime.datetime.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
-                else:
-                    # probably need a similar check here, too
-                    self.game_date = datetime.date.today().strftime('%a %b %-d')
-            elif self.game_date.lower() == 'tomorrow':
-                self.game_date = (datetime.date.today() + datetime.timedelta(days = 1)).strftime('%a %b %-d')
-            elif self.game_date:
-                self.game_date = self.game_date[0:-2]
-
-        self.game_time = kwargs['time'].strip() if 'time' in kwargs else ''
-        self.event_id = kwargs['event_id'] if 'event_id' in kwargs else ''
-        self.last_updated = f'{datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}'
-
-        return
-
-    def load_from_table(
-        self,
-        table: bs,
-        **kwargs):
-
-        table_rows = table.find_all([DK_STR_GAME_TABLE_ROW_TAG])
-        if len(table_rows) != 2:
-            return
-
-        self.load_from_rows([table_rows[0], table_rows[1]], kwargs)
-        return
-
-    def calculate_kelly_criterion(
-        self,
-        team: str) -> float:
-
-        if not self.kenpom_event:
-            return 0
-
-        moneyline = self.home_team_moneyline if team == self.home_team else self.away_team_moneyline
-        decimal_odds = 0
-        if moneyline >= 0:
-            decimal_odds = (moneyline / 100) + 1
-        else:
-            decimal_odds = (100 / -moneyline) + 1
-
-
-        b = decimal_odds - 1
-        p = self.kenpom_event.confidence if self.kenpom_event.winning_team == team else 1 - self.kenpom_event.confidence
-        q = 1 - p
-        k = (b * p - q) / b if b != 0 else 0
-
-        f = '{:.2f}'.format(k)
-        return float(f)
-
-    def print(
-        self) -> None:
-
-        game_time_string = f' ({self.game_date}, {self.game_time})' if (self.game_date and self.game_time) else ''
-        event_url = f' - {self.create_event_url()}'
-
-        print()
-        print(f'Summary of {self.away_team} @ {self.home_team}{game_time_string}{event_url}')
-        print(f'  {str("Updated: ").ljust(15)}\t {datetime.date.today()} {datetime.datetime.now().strftime("%H:%M:%S")}')
-        print(f'  {self.away_team.ljust(15)}\t {self.away_team_spread} ({self.away_team_odds})\t Moneyline: {self.away_team_moneyline}')
-        print(f'  {self.home_team.ljust(15)}\t {self.home_team_spread} ({self.home_team_odds})\t Moneyline: {self.home_team_moneyline}')
-        print(f'  {str("Over:").ljust(15)}\t {self.over_under} ({self.over_odds})')
-        print(f'  {str("Under:").ljust(15)}\t {self.over_under} ({self.under_odds})')
-
-        if self.kenpom_event:
-            print(f'  KenPom:')
-            print(f'    Winner: {self.kenpom_event.winning_team} {self.kenpom_event.score} ({self.kenpom_event.confidence * 100}%)')
-
-            k_home = self.calculate_kelly_criterion(self.home_team)
-            k_away = self.calculate_kelly_criterion(self.away_team)
-
-            if k_home > 0:
-                print(f'  Kelly: {self.home_team}: {k_home * 100}%')
-            if k_away > 0:
-                print(f'  Kelly: {self.away_team}: {k_away * 100}%')
-
-        return
-
 def main(
     args: argparse.Namespace) -> None:
+
+    db_client = MongoClient('localhost')
 
     event_groups = []
     if args.cfb:
@@ -394,7 +363,9 @@ def main(
             CFB_SHEET_INDEX,
             CFB_SHEET_NAME,
             skip_missing_moneyline,
-            include_kenpom)
+            include_kenpom,
+            db_client,
+            'cfb')
         )
     if args.ncaam:
         skip_missing_moneyline = True
@@ -405,7 +376,9 @@ def main(
             NCAAM_SHEET_INDEX,
             NCAAM_SHEET_NAME,
             skip_missing_moneyline,
-            include_kenpom)
+            include_kenpom,
+            db_client,
+            'ncaam')
         )
 
     if not event_groups:
@@ -425,7 +398,7 @@ def main(
     }
 
     for event_group in event_groups:
-        event_group.load(cookies = cookies, headers = headers)
+        event_group.load_from_url(cookies = cookies, headers = headers)
 
         if event_group.names_to_update:
             print('The following name mismatches were detected. Add these entries to team_index.py:')

@@ -6,18 +6,21 @@ from typing import List, Tuple
 
 from googleapiclient.discovery import Resource, build
 from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
+import google.auth.transport.requests
+import google.oauth2.credentials
+import google.oauth2.service_account
 
 from dk import DraftKingsEventGroup, DraftKingsSingleEvent, DK_STR_EVENTS_URL
+from event import BettingChoices
 import team_colors as tc
 
 GOOGLE_CLIENT_SECRETS_FILE = './keys/app_secret.json'
 GOOGLE_CREDENTIALS_FILE_LOCAL = './keys/client_secret.json'
+GOOGLE_SERVICE_ACCOUNT_FILE = './keys/keep-gaming-bot-service-account.json'
 
 GOOGLE_API_SERVICE_NAME = 'sheets'
 GOOGLE_API_SERVICE_VERSION = 'v4'
-GOOGLE_API_SCOPES = ['https://www.googleapis.com/auth/drive.file']
+GOOGLE_API_SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets']
 
 GOOGLE_SHEETS_BASE_URL = 'https://docs.google.com/spreadsheets/d'
 
@@ -99,15 +102,20 @@ def create_spreadsheet_url(
 
 def get_credentials(
     credentials_file: str,
+    is_service_account: bool,
     scopes: str) -> str:
 
     credentials = None
     if path.exists(credentials_file):
-        credentials = Credentials.from_authorized_user_file(credentials_file, scopes)
+        if not is_service_account:
+            credentials = google.oauth2.credentials.Credentials.from_authorized_user_file(credentials_file, scopes)
+        else:
+            credentials = google.oauth2.service_account.Credentials.from_service_account_file(credentials_file, scopes = scopes)
+            return credentials
 
     if not credentials or not credentials.valid:
         if credentials and credentials.expired and credentials.refresh_token:
-            credentials.refresh(Request())
+            credentials.refresh(google.auth.transport.requests.Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
                 GOOGLE_CLIENT_SECRETS_FILE, scopes)
@@ -120,11 +128,14 @@ def get_credentials(
 
 def get_spreadsheet_service() -> Resource:
 
+    is_service_account = True
     credentials = get_credentials(
-        GOOGLE_CREDENTIALS_FILE_LOCAL,
+        #GOOGLE_CREDENTIALS_FILE_LOCAL,
+        GOOGLE_SERVICE_ACCOUNT_FILE,
+        is_service_account,
         GOOGLE_API_SCOPES)
 
-    if not credentials or not credentials.valid:
+    if not credentials or (not is_service_account and not credentials.valid):
         return None
 
     service = build(
@@ -364,47 +375,51 @@ def add_event_rows(
             away_values = [
                 [
                     event.last_updated,
-                    event.away_team_spread,
+                    event.betting_lines[-1].away_team_spread,
                     f'=MINUS({starting_spread_column}{row}, {latest_spread_column}{row})',
-                    event.over_under,
+                    event.betting_lines[-1].over_under,
                     f'=MINUS({starting_over_under_column}{row},{latest_over_under_column}{row})',
-                    event.away_team_moneyline,
+                    event.betting_lines[-1].away_team_moneyline,
                     f'=MINUS({starting_moneyline_column}{row},{latest_moneyline_column}{row})'
                 ]
             ]
 
             away_kelly_latest_range = f'{sheet_name}!{kenpom_latest_column}{row}:{kelly_latest_column}{row}'
-            if event.kenpom_event:
-                if event.away_team == event.kenpom_event.winning_team:
-                    away_kelly_latest_values[0].append(event.kenpom_event.confidence)
+            if event.betting_lines[-1].kenpom_event:
+                if event.away_team == event.betting_lines[-1].kenpom_event.winning_team:
+                    away_kelly_latest_values[0].append(event.betting_lines[-1].kenpom_event.confidence)
                 else:
-                    away_kelly_latest_values[0].append(1 - event.kenpom_event.confidence)
+                    away_kelly_latest_values[0].append(1 - event.betting_lines[-1].kenpom_event.confidence)
                 away_kelly_latest_values[0].append(f'=IF({kelly_latest_column}{row}>0,{matchup_column}{row},"")')
-                away_kelly_latest_values[0].append(event.calculate_kelly_criterion(event.away_team))
+                away_kelly_latest_values[0].append(event.betting_lines[-1].calculate_kelly_criterion(event.away_team, False))
 
         if not event.in_progress:
             # home team row
             home_values = [
                 [
                     event.last_updated,
-                    event.home_team_spread,
+                    event.betting_lines[-1].home_team_spread,
                     f'=MINUS({starting_spread_column}{row + 1},{latest_spread_column}{row + 1})',
-                    event.over_under,
+                    event.betting_lines[-1].over_under,
                     f'=MINUS({starting_over_under_column}{row + 1},{latest_over_under_column}{row + 1})',
-                    event.home_team_moneyline,
+                    event.betting_lines[-1].home_team_moneyline,
                     f'=MINUS({starting_moneyline_column}{row + 1},{latest_moneyline_column}{row + 1})'
                 ]
             ]
 
             home_kelly_latest_range = f'{sheet_name}!{kenpom_latest_column}{row + 1}:{kelly_latest_column}{row + 1}'
-            if event.kenpom_event:
-                if event.home_team == event.kenpom_event.winning_team:
-                    home_kelly_latest_values[0].append(event.kenpom_event.confidence)
+            if event.betting_lines[-1].kenpom_event:
+                if event.home_team == event.betting_lines[-1].kenpom_event.winning_team:
+                    home_kelly_latest_values[0].append(event.betting_lines[-1].kenpom_event.confidence)
                 else:
-                    home_kelly_latest_values[0].append(1 - event.kenpom_event.confidence)
+                    home_kelly_latest_values[0].append(1 - event.betting_lines[-1].kenpom_event.confidence)
                 home_kelly_latest_values[0].append(f'=IF({kelly_latest_column}{row + 1}>0,{matchup_column}{row + 1},"")')
-                home_kelly_latest_values[0].append(event.calculate_kelly_criterion(event.home_team))
+                home_kelly_latest_values[0].append(event.betting_lines[-1].calculate_kelly_criterion(event.home_team, True))
     else:
+        # if the event is in progress but we haven't seen it before, skip it
+        if event.in_progress:
+            return True
+
         start_column = SHEET_COLUMNS[0]
         stop_column = SHEET_COLUMNS[SHEET_HEADER_COLUMN_ORDER.index(MONEYLINE_MOVEMENT)]
 
@@ -419,14 +434,14 @@ def add_event_rows(
                 event.game_date,
                 event.game_time,
                 event.away_team,
-                event.away_team_spread,
+                event.betting_lines[0].away_team_spread,
                 '', # checkbox for bet spread
                 '', # leave blank for last bet spread
                 f'O',
-                event.over_under,
+                event.betting_lines[0].over_under,
                 '', # checkbox for bet o/u
                 '', # leave blank for last bet /u
-                event.away_team_moneyline,
+                event.betting_lines[0].away_team_moneyline,
                 '', # checkbox for bet moneyline
                 event.last_updated,
                 '', # spread latest
@@ -438,19 +453,19 @@ def add_event_rows(
             ]
         ]
 
-        if event.kenpom_event:
-            if event.away_team == event.kenpom_event.winning_team:
-                away_values[0].append(event.kenpom_event.confidence)
+        if event.betting_lines[0].kenpom_event:
+            if event.away_team == event.betting_lines[0].kenpom_event.winning_team:
+                away_values[0].append(event.betting_lines[0].kenpom_event.confidence)
             else:
-                away_values[0].append(1 - event.kenpom_event.confidence)
+                away_values[0].append(1 - event.betting_lines[0].kenpom_event.confidence)
             away_values[0].append(f'=IF({kelly_starting_column}{row}>0,{matchup_column}{row},"")') # best bet starting
-            away_values[0].append(event.calculate_kelly_criterion(event.away_team)) # kelly starting
-            if event.away_team == event.kenpom_event.winning_team:
-                away_values[0].append(event.kenpom_event.confidence)
+            away_values[0].append(event.betting_lines[0].calculate_kelly_criterion(event.away_team, False)) # kelly starting
+            if event.away_team == event.betting_lines[0].kenpom_event.winning_team:
+                away_values[0].append(event.betting_lines[0].kenpom_event.confidence)
             else:
-                away_values[0].append(1 - event.kenpom_event.confidence)
+                away_values[0].append(1 - event.betting_lines[0].kenpom_event.confidence)
             away_values[0].append(f'=IF({kelly_latest_column}{row}>0,{matchup_column}{row},"")') # best bet latest
-            away_values[0].append(event.calculate_kelly_criterion(event.away_team)) # kelly latest
+            away_values[0].append(event.betting_lines[0].calculate_kelly_criterion(event.away_team, False)) # kelly latest
             stop_column = kelly_latest_column
 
         # home team row
@@ -460,14 +475,14 @@ def add_event_rows(
                 '', # merged
                 '', # merged
                 event.home_team,
-                event.home_team_spread,
+                event.betting_lines[0].home_team_spread,
                 '', # checkbox for bet spread
                 '', # leave blank for last bet spread
                 f'U',
-                event.over_under,
+                event.betting_lines[0].over_under,
                 '', # checkbox for bet o/u
                 '', # leave blank for last bet o/u
-                event.home_team_moneyline,
+                event.betting_lines[0].home_team_moneyline,
                 '', # checkbox for bet moneyline
                 event.last_updated,
                 '', # spread latest
@@ -479,19 +494,19 @@ def add_event_rows(
             ]
         ]
 
-        if event.kenpom_event:
-            if event.home_team == event.kenpom_event.winning_team:
-                home_values[0].append(event.kenpom_event.confidence)
+        if event.betting_lines[0].kenpom_event:
+            if event.home_team == event.betting_lines[0].kenpom_event.winning_team:
+                home_values[0].append(event.betting_lines[0].kenpom_event.confidence)
             else:
-                home_values[0].append(1 - event.kenpom_event.confidence)
+                home_values[0].append(1 - event.betting_lines[0].kenpom_event.confidence)
             home_values[0].append(f'=IF({kelly_starting_column}{row + 1}>0,{matchup_column}{row + 1},"")') # best bet starting
-            home_values[0].append(event.calculate_kelly_criterion(event.home_team)) # kelly starting
-            if event.home_team == event.kenpom_event.winning_team:
-                home_values[0].append(event.kenpom_event.confidence)
+            home_values[0].append(event.betting_lines[0].calculate_kelly_criterion(event.home_team, True)) # kelly starting
+            if event.home_team == event.betting_lines[0].kenpom_event.winning_team:
+                home_values[0].append(event.betting_lines[0].kenpom_event.confidence)
             else:
-                home_values[0].append(1 - event.kenpom_event.confidence)
+                home_values[0].append(1 - event.betting_lines[0].kenpom_event.confidence)
             home_values[0].append(f'=IF({kelly_latest_column}{row + 1}>0,{matchup_column}{row + 1},"")') # best bet latest
-            home_values[0].append(event.calculate_kelly_criterion(event.home_team)) # kelly latest
+            home_values[0].append(event.betting_lines[0].calculate_kelly_criterion(event.home_team, True)) # kelly latest
             stop_column = kelly_latest_column
 
     away_range = f'{sheet_name}!{start_column}{row}:{stop_column}{row}'
@@ -1560,11 +1575,12 @@ def format_event_rows(
 
     # add borders around spread, over/under, and moneyline cells and
     # their corresponding bet checkboxes
+    index = 0 if not update else -1
     if not update:
         format_borders_request = create_format_borders_request(
             sheet_id,
             starting_row,
-            event.kenpom_event is not None)
+            event.betting_lines[index].kenpom_event is not None)
 
         for request in format_borders_request:
             requests.append(request)
@@ -1982,6 +1998,20 @@ def update_spreadsheet_from_events(
                     row,
                     update)
 
+                betting_choices = get_betting_choices_from_spreadsheet(
+                    service,
+                    spreadsheet_id,
+                    sheet_name,
+                    row)
+
+                event.betting_choices = betting_choices
+                event.update_betting_choices_in_database()
+
+                # jmd: temporarily disable generating html until we know
+                # what we actually want to record and plot.
+                #filename = f'/home/delancey/projects/dk/plots/{event_group.database_name}/{event.event_id}.html'
+                #event.write_html(filename)
+
                 print(f'Updated data for event: {event.away_team} @ {event.home_team} ({event_index}/{event_count})')
                 del event_ids[event.event_id]
             else:
@@ -2044,6 +2074,43 @@ def update_spreadsheet_from_events(
     print(f'To update again: dk.py --update {spreadsheet_id}')
 
     return True
+
+def get_betting_choices_from_spreadsheet(
+    service: Resource,
+    spreadsheet_id: str,
+    sheet_name: str,
+    row: int) -> BettingChoices:
+
+    indices = [
+        SHEET_HEADER_COLUMN_ORDER.index(BET_SPREAD),
+        SHEET_HEADER_COLUMN_ORDER.index(BET_OVER_UNDER),
+        SHEET_HEADER_COLUMN_ORDER.index(BET_MONEYLINE)
+    ]
+    columns = list(map(lambda x: SHEET_COLUMNS[x], indices))
+
+    requested_ranges = []
+    for column in columns:
+        requested_ranges.append(f'{sheet_name}!{column}{row}:{column}{row + 1}')
+
+    request = service.spreadsheets().values().batchGet(
+        spreadsheetId = spreadsheet_id,
+        ranges = requested_ranges)
+    response = request.execute()
+
+    betting_choices = BettingChoices()
+
+    if 'valueRanges' not in response or len(response['valueRanges']) != 3:
+        return betting_choices
+
+    value_ranges = response['valueRanges']
+    betting_choices.bet_away_spread = True if value_ranges[0]['values'][0][0] == 'TRUE' else False
+    betting_choices.bet_home_spread = True if value_ranges[0]['values'][1][0] == 'TRUE' else False
+    betting_choices.bet_over = True if value_ranges[1]['values'][0][0] == 'TRUE' else False
+    betting_choices.bet_under = True if value_ranges[1]['values'][1][0] == 'TRUE' else False
+    betting_choices.bet_away_moneyline = True if value_ranges[2]['values'][0][0] == 'TRUE' else False
+    betting_choices.bet_home_moneyline = True if value_ranges[2]['values'][1][0] == 'TRUE' else False
+
+    return betting_choices
 
 def get_event_ids_from_sheet(
     service: Resource,

@@ -46,6 +46,19 @@ class KenPomEvent:
 
         return
 
+    def load_from_database(
+        self,
+        db_entry: dict):
+
+        self.last_updated = db_entry['last_updated'] if 'last_updated' in db_entry else ''
+        self.away_team = db_entry['away_team'] if 'away_team' in db_entry else ''
+        self.home_team = db_entry['home_team'] if 'home_team' in db_entry else ''
+        self.winning_team = db_entry['winning_team'] if 'winning_team' in db_entry else ''
+        self.score = db_entry['score'] if 'score' in db_entry else ''
+        self.confidence = db_entry['confidence'] if 'confidence' in db_entry else ''
+
+        return
+
     def load_from_row(
         self,
         row) -> None:
@@ -110,6 +123,20 @@ class KenPomEvent:
             return True
 
         return False
+
+    def create_mongodb_dict(
+        self) -> dict:
+
+        d = {
+            'last_updated': self.last_updated,
+            'away_team': self.away_team,
+            'home_team': self.home_team,
+            'winning_team': self.winning_team,
+            'score': self.score,
+            'confidence': self.confidence
+        }
+
+        return d
 
 
 def get_kenpom_events() -> List[KenPomEvent]:
