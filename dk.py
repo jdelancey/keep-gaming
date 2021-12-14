@@ -11,6 +11,8 @@ import event
 import google_sheets_utils as gsu
 import kenpom
 
+DK_USE_DATABASE = False
+
 DK_STR_BASE_URL = 'https://sportsbook.draftkings.com'
 DK_STR_EVENTS_URL = f'{DK_STR_BASE_URL}/event'
 
@@ -256,8 +258,14 @@ class DraftKingsEventGroup:
         self.skip_missing_moneyline = skip_missing_moneyline
         self.include_kenpom = include_kenpom
         self.names_to_update = []
-        self.database_name = database_name
-        self.database = database_client.get_database(database_name)
+
+
+        self.database_name = ''
+        self.database = None
+        if DK_USE_DATABASE in globals() and DK_USE_DATABASE:
+            self.database_name = database_name
+            self.database = database_client.get_database(database_name)
+
 
         return
 

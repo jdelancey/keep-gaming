@@ -2009,8 +2009,8 @@ def update_spreadsheet_from_events(
 
                 # jmd: temporarily disable generating html until we know
                 # what we actually want to record and plot.
-                #filename = f'/home/delancey/projects/dk/plots/{event_group.database_name}/{event.event_id}.html'
-                #event.write_html(filename)
+                filename = f'/home/delancey/projects/dk/plots/{event_group.database_name}/{event.event_id}.html'
+                event.write_html(filename)
 
                 print(f'Updated data for event: {event.away_team} @ {event.home_team} ({event_index}/{event_count})')
                 del event_ids[event.event_id]

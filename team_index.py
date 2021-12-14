@@ -44,4 +44,5 @@ NAME_REPLACEMENT_DICT = {
     'Connecticut': 'UConn',
     'Nebraska Omaha': 'Omaha',
     'Saint Joseph\'s': 'Saint Josephs',
+    'Saint Peter\'s': 'Saint Peters',
 }
